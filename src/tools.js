@@ -1,6 +1,6 @@
 /**
  * The agent-facing surface (ADR-0066 §4). SMALLER than the API on purpose:
- * six tools, each a translation of routes that exist today. Nothing here
+ * seven tools, each a translation of routes that exist today. Nothing here
  * advertises a capability the fleet does not have — a tool that always fails
  * costs a model a turn and teaches it to distrust the rest.
  *
@@ -40,6 +40,19 @@ function renderExec(result) {
  */
 export function buildTools(client) {
   return [
+    {
+      name: 'get_credit_balance',
+      title: 'Get compute-credit balance',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      description:
+        'Show this account\'s remaining compute credits. One credit runs one standard environment for one minute; paused environments use no compute credits.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      async handler() {
+        const balance = await client.creditBalance();
+        const millicredits = Number(balance.balance_millicredits ?? 0);
+        return `${(millicredits / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })} compute credits remaining\n1 credit = 1 active standard-environment minute`;
+      },
+    },
     {
       name: 'create_environment',
       title: 'Create environment',

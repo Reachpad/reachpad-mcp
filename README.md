@@ -70,6 +70,7 @@ escalation nobody chose to perform.
 
 | tool | what it does |
 |---|---|
+| `get_credit_balance()` | remaining compute credits. One credit runs one standard environment for one minute. |
 | `create_environment(name, repo?, ref?)` | a new environment, optionally with a repository cloned into `/work` |
 | `list_environments()` | your environments and how many forks each has |
 | `get_environment(environment)` | what it resumes from — a snapshot carrying memory resumes mid-process; a disk-only one boots |

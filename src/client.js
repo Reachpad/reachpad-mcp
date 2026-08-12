@@ -219,6 +219,14 @@ export class ControlClient {
     }));
   }
 
+  /** Account-authorized, fleet-authoritative compute-credit balance. */
+  async creditBalance() {
+    const identity = await this.identityToken();
+    return this.request('POST', '/v1/credits/balance', {
+      body: { user_id: identity.userId, identity_token: identity.token },
+    });
+  }
+
   /**
    * The owner Biscuit for a workspace this process did not create.
    * `POST /v1/workspaces/:id/token` mints one from the identity token, which
