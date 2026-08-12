@@ -65,6 +65,8 @@ export class ControlClient {
     this.endpoint = resolveEndpoint(opts.endpoint);
     this.operatorToken = opts.operatorToken;
     this.identityCredential = opts.identityCredential;
+    /** Human-readable account this connection acts as, when the host knows it. */
+    this.accountLabel = opts.accountLabel;
     this.apiKey = opts.apiKey;
     this.idpAssertion = opts.idpAssertion;
     this.userId = opts.userId;

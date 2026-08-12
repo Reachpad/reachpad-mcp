@@ -83,8 +83,12 @@ export function buildTools(client) {
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async handler() {
         const rows = await client.listWorkspaces();
-        if (!rows.length) return 'No environments yet.';
-        return rows
+        // The account leads, and it leads on the EMPTY answer especially: "no
+        // environments" and "no environments for THIS account" are different
+        // sentences, and only the second one lets someone spot a wrong login.
+        const who = client.accountLabel ? `account: ${client.accountLabel}\n` : '';
+        if (!rows.length) return `${who}No environments yet.`;
+        return who + rows
           .map((row) => {
             const bits = [row.id, row.name || '(unnamed)'];
             if (row.forks) bits.push(`${row.forks} fork${row.forks === 1 ? '' : 's'}`);

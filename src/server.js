@@ -27,11 +27,17 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
     identityCredential: env.REACHPAD_IDENTITY_CREDENTIAL,
     apiKey: env.REACHPAD_API_KEY,
     idpAssertion: env.REACHPAD_IDP_ASSERTION,
+    accountLabel: env.REACHPAD_ACCOUNT_LABEL?.trim(),
     userId: env.REACHPAD_USER_ID,
     principalId: env.REACHPAD_PRINCIPAL_ID,
     fetch: fetchImpl,
   });
   const tools = buildTools(client);
+  // Which account this connection acts as. Nothing else tells anyone: a person
+  // who authorized with the wrong email gets a working connection to an empty
+  // account, and silence makes that look like lost work rather than a wrong
+  // login. Saying it once, up front, is the whole fix.
+  const account = env.REACHPAD_ACCOUNT_LABEL?.trim();
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
   /** @returns {object|null} a response, or null for a notification. */
@@ -46,6 +52,15 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
             protocolVersion: PROTOCOL_VERSION,
             capabilities: { tools: { listChanged: false } },
             serverInfo: SERVER_INFO,
+            ...(account
+              ? {
+                  instructions:
+                    `This reachpad connection acts as ${account}. Environments belong to that ` +
+                    `account and no other. If someone expects to see environments that are not ` +
+                    `listed, say which account is connected before anything else — the usual ` +
+                    `cause is authorizing with a different email than the one they use for reachpad.`,
+                }
+              : {}),
           });
 
         case 'notifications/initialized':
