@@ -42,7 +42,20 @@ jobs:
             echo "tag v$tag does not match package.json $pkg" >&2
             exit 1
           fi
-      - run: npm publish
+      # Idempotent on purpose. This job has two publishes — npm and the
+      # registry — and the first one succeeding while the second fails leaves a
+      # release that cannot simply be re-run: npm refuses a version it already
+      # has, so the retry dies before reaching the step that actually failed.
+      # Skipping an existing version makes the tag re-runnable until BOTH
+      # halves are done, which is the only state worth calling released.
+      - name: publish to npm
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "@reachpad/mcp@$version" version >/dev/null 2>&1; then
+            echo "@reachpad/mcp@$version is already on npm; leaving it alone"
+          else
+            npm publish
+          fi
 
       # The official registry, in the same release rather than as a thing
       # somebody remembers to do afterwards. Most other directories index FROM
