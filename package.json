@@ -1,6 +1,6 @@
 {
   "name": "@reachpad/mcp",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "mcpName": "io.github.Reachpad/reachpad-mcp",
   "description": "Development infrastructure for coding agents: persistent cloud environments they create, operate and test software in, over API, MCP or CLI.",
   "type": "module",

@@ -59,7 +59,7 @@ test('a connector can handshake and call a tool over HTTP', async () => {
     assert.equal(body.result.serverInfo.name, 'reachpad');
 
     const listed = await (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json();
-    assert.equal(listed.result.tools.length, 6);
+    assert.equal(listed.result.tools.length, 7);
 
     const called = await (
       await rpc({

@@ -56,6 +56,15 @@ export async function startStubControld(options = {}) {
       });
     }
 
+    if (url.pathname === '/v1/credits/balance' && req.method === 'POST') {
+      return send(200, {
+        balance_millicredits: state.balanceMillicredits ?? 1_000_000,
+        balance_credits: (state.balanceMillicredits ?? 1_000_000) / 1000,
+        unit: 'standard_workspace_minute',
+        updated_at_ms: 1,
+      });
+    }
+
     // --- workspaces ------------------------------------------------------
     if (url.pathname === '/v1/workspaces' && req.method === 'POST') {
       if (state.entitlementFull) {

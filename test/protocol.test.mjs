@@ -99,6 +99,7 @@ test('the handshake reports the protocol version and the tool surface', async ()
       'checkpoint_environment',
       'create_environment',
       'delete_environment',
+      'get_credit_balance',
       'get_environment',
       'list_environments',
       'run_command',
@@ -159,6 +160,16 @@ test('the whole arc: create, run, checkpoint, list, delete', async () => {
     // I6: the identity token is exchanged once and reused, not minted per call.
     const sessions = stub.state.calls.filter((c) => c.path === '/v1/operator/session');
     assert.equal(sessions.length, 1, 'the operator credential should be exchanged once');
+  });
+});
+
+test('the credit tool states the balance and the unit', async () => {
+  await withServer({ balanceMillicredits: 123_500 }, async (client) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    const result = await client.call('get_credit_balance');
+    assert.equal(result.isError, false);
+    assert.match(result.content[0].text, /123\.5 compute credits remaining/);
+    assert.match(result.content[0].text, /1 active standard-environment minute/);
   });
 });
 
