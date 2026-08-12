@@ -104,3 +104,16 @@ a child process and speaks real JSON-RPC over its stdio against a stub control
 plane on a real socket, so nothing under test is an internal import. One test
 runs the same arc against a real reachpad and skips when no endpoint is
 configured.
+
+## Repository
+
+This repository is the source. It is deliberately **separate from the reachpad
+backend**: this code is public, it is published to npm, and its release
+workflow holds publishing rights — none of which belong in the same repository
+as the control plane. Nothing here can read the backend's source, and no job in
+the backend copies files out to here.
+
+Two server constants are mirrored in `src/client.js` — the exec grace period
+and the default exec timeout. A mirrored constant normally rots; this one does
+not, because the backend's own CI fetches this published package and fails if
+they disagree. The check lives where the number would change.

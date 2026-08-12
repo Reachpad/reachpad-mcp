@@ -1,0 +1,45 @@
+name: publish
+
+# A PR bumps the version; PUSHING THE TAG publishes. Nothing outward happens on
+# a merge to main, so a release is always a deliberate act.
+#
+#   git tag v0.1.1 && git push origin v0.1.1
+#
+# Trusted Publishing (OIDC): there is NO npm token in this repository. npm mints
+# a short-lived credential for this workflow in this repository, so there is no
+# long-lived secret to steal, rotate, or find in a password manager years from
+# now. Configure it once at npmjs.com on the package:
+#
+#   Settings -> Trusted Publisher -> GitHub Actions
+#   org Reachpad · repo reachpad-mcp · workflow publish.yml · environment blank
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # the whole mechanism; without it npm gets no OIDC claim
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      # Node 22 ships npm 10, which predates OIDC publishing entirely. A floor
+      # rather than @latest, so a future npm cannot change a release out from
+      # under us on an unrelated day.
+      - name: npm new enough to speak OIDC
+        run: npm install -g npm@^11.5.1
+      - run: node --test 'test/*.test.mjs'
+      - name: the tag must name the version being published
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json $pkg" >&2
+            exit 1
+          fi
+      - run: npm publish

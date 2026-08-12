@@ -13,23 +13,27 @@ import { ApiError } from './errors.js';
 const IDENTITY_SKEW_MS = 60_000;
 
 /**
- * `EXEC_STREAM_GRACE_MS` in `bins/controld/src/execbroker.rs`: how long past an
- * exec's own timeout controld holds the caller's stream open before
- * terminating it itself. Mirrored here rather than guessed, because a client
- * deadline tighter than this one abandons work the server is still answering.
+ * How long past an exec's own timeout the reachpad control plane holds a
+ * caller's stream open before terminating it itself.
+ *
+ * This is a SERVER constant mirrored into a client, which is a thing that
+ * silently rots. It does not rot here: the server's own CI fetches this
+ * published package and fails if the two disagree, so the check lives where
+ * the number would change rather than where it is copied. The dependency
+ * points that way on purpose — the private repository reads this public
+ * package, never the reverse.
  */
 const EXEC_GRACE_MS = 150_000;
 
 /**
- * `DEFAULT_EXEC_TIMEOUT_MS` in the same file: what controld allows an exec
- * that names no `timeout_ms` of its own. Our fallback MUST be this and not a
- * friendlier number — a client that assumed two minutes here would abandon a
- * ten-minute build the server was still perfectly willing to finish, which is
- * the same defect as a deadline tighter than the grace, one layer up.
+ * What the server allows an exec that names no `timeout_ms` of its own. This
+ * fallback MUST match it and not be a friendlier number — a client assuming
+ * two minutes would abandon a ten-minute build the server was perfectly
+ * willing to finish, which is the same defect as a deadline tighter than the
+ * grace, one layer up. Both were real bugs here, found by running it.
  *
- * Both constants are entitlement FALLBACKS server-side (I13), so a tier can
- * move them. That is a reason to pass `timeout_ms` explicitly, not a reason to
- * guess lower here.
+ * Both are entitlement fallbacks server-side, so a plan can move them. That is
+ * a reason to pass `timeout_ms` explicitly, not a reason to guess lower.
  */
 const DEFAULT_EXEC_TIMEOUT_MS = 600_000;
 
