@@ -1,14 +1,24 @@
 # @reachpad/mcp
 
-Give a coding agent a **durable cloud environment** it can call: a filesystem
-and processes that survive between calls, resume after a pause, and fork from a
-snapshot so twenty attempts cost a delta rather than twenty rebuilds.
+**Development infrastructure for coding agents.** A reachpad environment is a
+cloud development computer an agent operates itself: a repo, a filesystem,
+installed dependencies, background processes and build state that all survive
+between calls — not an ephemeral sandbox that forgets.
 
-This is the MCP translation of [reachpad](https://reachpad.dev)'s REST API. The
-API is canonical; this server only translates, holds no state a restart cannot
-rebuild, and reaches nothing outside the public `/v1` surface.
+This is the MCP server. It lets Claude, ChatGPT, Cursor, OpenCode or your own
+agent create an environment, run commands in it, fork it, and come back to it
+later, without a developer keeping a laptop open for them.
 
-Zero runtime dependencies. Node ≥ 20.
+- **It persists.** Pause it and the disk and memory are sealed; the next call
+  resumes from that seal, mid-process, rather than rebuilding.
+- **It forks.** Twenty attempts from one prepared state cost a delta each, not
+  twenty rebuilds — because the environment is a snapshot chain, not a machine.
+- **It keeps secrets out of the box.** Credentials are injected at the
+  boundary; their values never enter the environment, the log or the store.
+- **It is agent-agnostic.** The REST API is canonical; this server, the SDK and
+  the CLI are translations of it. Bring your own agent.
+
+The API is the product boundary, not a web UI: [reachpad.dev](https://reachpad.dev).
 
 ## Install
 

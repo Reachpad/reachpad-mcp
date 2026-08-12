@@ -1,8 +1,8 @@
 {
   "name": "@reachpad/mcp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "mcpName": "io.github.Reachpad/reachpad-mcp",
-  "description": "Run coding agents in durable cloud environments from any MCP client. The reachpad REST API is canonical; this server translates it.",
+  "description": "Development infrastructure for coding agents: persistent cloud environments they create, operate and test software in, over API, MCP or CLI.",
   "type": "module",
   "license": "UNLICENSED",
   "homepage": "https://reachpad.dev",
@@ -27,8 +27,10 @@
     "mcp",
     "model-context-protocol",
     "reachpad",
-    "sandbox",
-    "development-environment"
+    "coding-agents",
+    "development-environment",
+    "cloud-development-environment",
+    "agent-infrastructure"
   ],
   "publishConfig": {
     "access": "public"
