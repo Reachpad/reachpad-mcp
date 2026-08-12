@@ -43,3 +43,17 @@ jobs:
             exit 1
           fi
       - run: npm publish
+
+      # The official registry, in the same release rather than as a thing
+      # somebody remembers to do afterwards. Most other directories index FROM
+      # it, so this is the step that keeps every listing current — and it
+      # authenticates with the SAME GitHub OIDC claim npm just used, which is
+      # why the server name is io.github.reachpad/*: a DNS-verified namespace
+      # would need a credential and would make every release manual again.
+      - name: publish to the MCP registry
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+

@@ -1,7 +1,7 @@
 {
   "name": "@reachpad/mcp",
   "version": "0.1.1",
-  "mcpName": "com.reachpad/reachpad",
+  "mcpName": "io.github.reachpad/reachpad-mcp",
   "description": "Run coding agents in durable cloud environments from any MCP client. The reachpad REST API is canonical; this server translates it.",
   "type": "module",
   "license": "UNLICENSED",
