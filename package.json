@@ -1,6 +1,6 @@
 {
   "name": "@reachpad/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "mcpName": "com.reachpad/reachpad",
   "description": "Run coding agents in durable cloud environments from any MCP client. The reachpad REST API is canonical; this server translates it.",
   "type": "module",
@@ -10,7 +10,10 @@
     "reachpad-mcp": "./src/server.js"
   },
   "exports": {
-    ".": "./src/server.js"
+    ".": {
+      "types": "./src/server.d.ts",
+      "default": "./src/server.js"
+    }
   },
   "files": [
     "src",
@@ -32,5 +35,6 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "types": "./src/server.d.ts"
 }
