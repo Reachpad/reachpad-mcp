@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
-  "name": "io.github.reachpad/reachpad-mcp",
+  "name": "io.github.Reachpad/reachpad-mcp",
   "description": "Durable cloud environments any coding agent can call: run commands, fork, resume.",
   "version": "0.1.2",
   "websiteUrl": "https://reachpad.dev",
