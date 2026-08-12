@@ -40,4 +40,14 @@ jobs:
               process.exit(1);
             }
             console.log("tarball is", p.size, "bytes,", files.length, "files");
+            // npm signs provenance on every OIDC publish and REFUSES the
+            // upload when package.json does not name the repository it was
+            // built from. That rejection arrives after the tarball is built
+            // and the attestation is already in the transparency log, which is
+            // a confusing place to learn it — so assert it here instead.
+            const repo = require("./package.json").repository?.url ?? "";
+            if (!repo.includes("Reachpad/reachpad-mcp")) {
+              console.error("repository.url must name this repo for provenance; got:", repo || "(missing)");
+              process.exit(1);
+            }
           '
