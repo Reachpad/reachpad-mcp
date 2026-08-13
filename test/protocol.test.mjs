@@ -130,6 +130,10 @@ test('the handshake reports the protocol version and the tool surface', async ()
     assert.equal(byName.run_command.annotations.destructiveHint, true);
     assert.equal(byName.list_environments.annotations.readOnlyHint, true);
     assert.equal(byName.delete_environment.annotations.destructiveHint, true);
+    assert.ok(
+      !byName.create_environment.inputSchema.required?.includes('name'),
+      'creating an environment must not make the caller invent a name',
+    );
   });
 });
 
@@ -137,9 +141,16 @@ test('the whole arc: create, run, checkpoint, list, delete', async () => {
   await withServer({}, async (client, stub) => {
     await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
 
-    const created = await client.call('create_environment', { name: 'demo' });
-    assert.match(created.content[0].text, /environment ws-1 created/);
+    const created = await client.call('create_environment', {});
+    assert.match(
+      created.content[0].text,
+      /environment ws-1 created \(name: workspace-000000000001\)/,
+    );
     assert.equal(created.isError, false);
+    const createCall = stub.state.calls.find(
+      (call) => call.method === 'POST' && call.path === '/v1/workspaces',
+    );
+    assert.equal(createCall.body.name, undefined, 'MCP must let the server generate the name');
 
     const ran = await client.call('run_command', {
       environment: 'ws-1',
@@ -152,7 +163,7 @@ test('the whole arc: create, run, checkpoint, list, delete', async () => {
     assert.match(forked.content[0].text, /forked ws-1 → ws-2 \(try-b\)/);
 
     const listed = await client.call('list_environments');
-    assert.match(listed.content[0].text, /ws-1\s+demo\s+1 fork/);
+    assert.match(listed.content[0].text, /ws-1\s+workspace-000000000001\s+1 fork/);
 
     const deleted = await client.call('delete_environment', { environment: 'ws-1' });
     assert.match(deleted.content[0].text, /archived; its history is intact/);

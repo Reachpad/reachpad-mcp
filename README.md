@@ -71,7 +71,7 @@ escalation nobody chose to perform.
 | tool | what it does |
 |---|---|
 | `get_credit_balance()` | remaining compute credits. One credit runs one standard environment for one minute. |
-| `create_environment(name, repo?, ref?)` | a new environment, optionally with a repository cloned into `/work` |
+| `create_environment(repo?, ref?, name?)` | a new environment, optionally with a repository cloned into `/work`. Reachpad generates its display name when omitted. |
 | `list_environments()` | your environments and how many forks each has |
 | `get_environment(environment)` | what it resumes from — a snapshot carrying memory resumes mid-process; a disk-only one boots |
 | `run_command(environment, argv, cwd?, env?, timeout_ms?)` | one command, its exit code and its output. A paused environment resumes to serve it. |

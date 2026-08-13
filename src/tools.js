@@ -62,19 +62,21 @@ export function buildTools(client) {
       inputSchema: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: 'Human-readable name, e.g. the repo or task.' },
+          name: {
+            type: 'string',
+            description: 'Optional display name. Reachpad generates one when omitted.',
+          },
           repo: {
             type: 'string',
             description: 'Optional git URL to clone into /work. Must be reachable without credentials unless the account has a mirror for it.',
           },
           ref: { type: 'string', description: 'Optional branch or tag to check out.' },
         },
-        required: ['name'],
         additionalProperties: false,
       },
       async handler({ name, repo, ref }) {
         const created = await client.createWorkspace(name);
-        const lines = [`environment ${created.id} created (name: ${name})`];
+        const lines = [`environment ${created.id} created (name: ${created.name})`];
         if (repo) {
           const argv = ['/bin/sh', '-lc', cloneScript(repo, ref)];
           const result = await client.exec(created.id, { argv, timeoutMs: 300_000 });

@@ -76,8 +76,12 @@ export async function startStubControld(options = {}) {
         });
       }
       const id = `ws-${state.nextId++}`;
-      state.workspaces.set(id, { id, name: body.name, forks: [], archived: false });
-      return send(201, { workspace: { id }, biscuit: `biscuit-${id}` });
+      const name =
+        typeof body.name === 'string' && body.name.trim()
+          ? body.name.trim()
+          : `workspace-${id.slice(3).padStart(12, '0')}`;
+      state.workspaces.set(id, { id, name, forks: [], archived: false });
+      return send(201, { workspace: { id, name }, biscuit: `biscuit-${id}` });
     }
 
     if (url.pathname === '/v1/workspaces' && req.method === 'GET') {
