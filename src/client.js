@@ -194,16 +194,23 @@ export class ControlClient {
     return this.identity;
   }
 
-  /** POST /v1/workspaces → { id, biscuit } */
+  /** POST /v1/workspaces → { id, name, biscuit } */
   async createWorkspace(name) {
     const identity = await this.identityToken();
+    const requestedName = typeof name === 'string' ? name.trim() : '';
     const body = await this.request('POST', '/v1/workspaces', {
-      body: { user_id: identity.userId, identity_token: identity.token, name },
+      body: {
+        user_id: identity.userId,
+        identity_token: identity.token,
+        ...(requestedName ? { name: requestedName } : {}),
+      },
     });
     const id = body.workspace?.id;
+    const createdName = body.workspace?.name;
     if (!id) throw new Error('unexpected response shape: workspace.id missing');
+    if (!createdName) throw new Error('unexpected response shape: workspace.name missing');
     if (body.biscuit) this.biscuits.set(id, body.biscuit);
-    return { id, biscuit: body.biscuit };
+    return { id, name: createdName, biscuit: body.biscuit };
   }
 
   /** GET /v1/workspaces?user_id=… */
