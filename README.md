@@ -9,8 +9,9 @@ This is the MCP server. It lets Claude, ChatGPT, Cursor, OpenCode or your own
 agent create an environment, run commands in it, fork it, and come back to it
 later, without a developer keeping a laptop open for them.
 
-- **It persists.** Pause it and the disk and memory are sealed; the next call
-  resumes from that seal, mid-process, rather than rebuilding.
+- **It persists.** Pause it and the disk is sealed; the next call boots from
+  that seal with the files, installs and git state intact, rather than
+  rebuilding. Processes are the exception: a start is always a cold boot.
 - **It forks.** Twenty attempts from one prepared state cost a delta each, not
   twenty rebuilds — because the environment is a snapshot chain, not a machine.
 - **It keeps secrets out of the box.** Credentials are injected at the
@@ -72,7 +73,7 @@ escalation nobody chose to perform.
 |---|---|
 | `create_environment(name, repo?, ref?)` | a new environment, optionally with a repository cloned into `/work` |
 | `list_environments()` | your environments and how many forks each has |
-| `get_environment(environment)` | what it resumes from — a snapshot carrying memory resumes mid-process; a disk-only one boots |
+| `get_environment(environment)` | what it boots from: its head snapshot, its log position and its fork tree |
 | `run_command(environment, argv, cwd?, env?, timeout_ms?)` | one command, its exit code and its output. A paused environment resumes to serve it. |
 | `checkpoint_environment(environment, name?)` | fork from the last sealed snapshot; the original is untouched |
 | `delete_environment(environment)` | archive it and free the plan slot. Nothing is deleted — snapshots and history survive. |

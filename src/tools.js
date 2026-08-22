@@ -104,7 +104,7 @@ export function buildTools(client) {
       title: 'Inspect environment',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        'What an environment resumes from: its head snapshot, whether that snapshot carries memory (resumes mid-process) or only disk (boots), and its fork tree.',
+        'What an environment resumes from: its head snapshot, how far its log had got, and its fork tree. Every start is a cold boot from the head snapshot: files survive, running processes do not.',
       inputSchema: {
         type: 'object',
         properties: { environment: { type: 'string' } },
@@ -118,12 +118,13 @@ export function buildTools(client) {
         if (!head) {
           lines.push('never sealed — the next command cold-boots it');
         } else {
+          // A snapshot is a disk image and there is no other kind: memory
+          // snapshotting was removed outright and every start is a cold boot
+          // (fleet ADR-0104). The `disk+mem` branch this replaced told agents
+          // a resumed environment came back mid-process, which shaped how they
+          // planned long runs.
           const kind = head.kind ?? 'unknown';
-          lines.push(
-            kind === 'disk+mem'
-              ? 'head snapshot is disk+mem — it resumes mid-process inside its pool'
-              : `head snapshot is ${kind} — it boots`,
-          );
+          lines.push(`head snapshot is ${kind} — the next command boots from it`);
           if (head.log_seq !== undefined) lines.push(`at log seq ${head.log_seq}`);
         }
         const forks = body.forks ?? [];
