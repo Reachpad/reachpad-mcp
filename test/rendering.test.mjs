@@ -101,6 +101,28 @@ test('endpoint resolution refuses plaintext to anywhere but loopback', () => {
   assert.throws(() => resolveEndpoint(''), /no endpoint/);
 });
 
+test('a sealed head is READ, not reported as never sealed', async () => {
+  // The regression this pins: the handler read `body.head` and the endpoint
+  // answers `head_snapshot`, so every environment came back "never sealed" —
+  // including ones with forks, which cannot exist without a seal. The stub
+  // carried the wrong key too, so the suite agreed with the bug. Assert the
+  // wire key here, against a body shaped like the real one.
+  const wire = {
+    head_snapshot: { id: 'snap-1063', log_seq: 10, purpose: 'checkpoint' },
+    snapshots: [],
+    forks: [],
+    ancestors: [],
+    spawned: [],
+  };
+  const tools = buildTools({ lineage: async () => wire });
+  const text = await tools.find((t) => t.name === 'get_environment').handler({ environment: 'ws-1' });
+
+  assert.doesNotMatch(text, /never sealed/);
+  assert.match(text, /boots from snap-1063/);
+  assert.match(text, /at log seq 10/);
+  assert.match(text, /running processes do not/);
+});
+
 test('inspecting an environment never promises a mid-process resume', async () => {
   // Memory snapshotting was removed from the fleet outright (ADR-0104) and
   // every start is a cold boot. This tool's description and its rendering both
@@ -108,7 +130,11 @@ test('inspecting an environment never promises a mid-process resume', async () =
   // is the one fact that changes how an agent plans a long run: it decides
   // whether pausing costs it the work in flight.
   const tools = buildTools({
-    lineage: async () => ({ head: { kind: 'disk', log_seq: 42 }, forks: [], ancestors: [] }),
+    lineage: async () => ({
+      head_snapshot: { id: 'snap-42', log_seq: 42 },
+      forks: [],
+      ancestors: [],
+    }),
   });
   const inspect = tools.find((t) => t.name === 'get_environment');
 
@@ -117,11 +143,13 @@ test('inspecting an environment never promises a mid-process resume', async () =
 
   const text = await inspect.handler({ environment: 'ws-1' });
   assert.doesNotMatch(text, /mid-process|disk\+mem/i);
-  assert.match(text, /boots from it/);
+  assert.match(text, /boots from snap-42/);
 });
 
 test('an environment with no head says so, and says it cold-boots', async () => {
-  const tools = buildTools({ lineage: async () => ({ head: null, forks: [], ancestors: [] }) });
+  const tools = buildTools({
+    lineage: async () => ({ head_snapshot: null, forks: [], ancestors: [] }),
+  });
   const inspect = tools.find((t) => t.name === 'get_environment');
   const text = await inspect.handler({ environment: 'ws-2' });
   assert.match(text, /never sealed/);
