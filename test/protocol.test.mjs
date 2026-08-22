@@ -99,9 +99,13 @@ test('the handshake reports the protocol version and the tool surface', async ()
       'checkpoint_environment',
       'create_environment',
       'delete_environment',
+      'expose_port',
       'get_credit_balance',
       'get_environment',
       'list_environments',
+      'list_ports',
+      'pause_environment',
+      'revoke_port',
       'run_command',
     ]);
     // Every tool must carry a schema an LLM can fill in without guessing, and
@@ -263,7 +267,10 @@ test('create with a repo clones it, and a failed clone does not masquerade as su
     });
     assert.match(ok.content[0].text, /cloned https:\/\/github.com\/acme\/app at feature\/foo/);
     const exec = stub.state.calls.find((c) => c.path.endsWith('/exec'));
-    assert.match(exec.body.argv[2], /git clone 'https:\/\/github.com\/acme\/app' \/work/);
+    // `$HOME/work`, never `/work`: the guest rootfs is read-only, so the
+    // literal path this used to assert failed on every real environment.
+    assert.match(exec.body.argv[2], /git clone 'https:\/\/github.com\/acme\/app' "\$HOME\/work"/);
+    assert.doesNotMatch(exec.body.argv[2], /mkdir -p \/work/);
     assert.match(exec.body.argv[2], /checkout 'feature\/foo'/);
     assert.match(exec.body.argv[2], /^set -e/);
   });
@@ -279,10 +286,115 @@ test('create with a repo clones it, and a failed clone does not masquerade as su
   });
 });
 
+test('expose_port opens a port, is idempotent, and says what it does not guarantee', async () => {
+  await withServer({}, async (client, stub) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+
+    const first = await client.call('expose_port', { environment: 'ws-1', port: 3000, check: false });
+    assert.match(first.content[0].text, /port 3000 in ws-1 is open at https:\/\/app\.example\.test\/token-/);
+    // The two facts a caller acts on, and neither is discoverable from a URL.
+    assert.match(first.content[0].text, /signed in to Reachpad/);
+    assert.match(first.content[0].text, /does NOT survive a pause/i);
+
+    // Idempotent per live (workspace, port): the SAME link, not a second one.
+    const again = await client.call('expose_port', { environment: 'ws-1', port: 3000, check: false });
+    assert.equal(first.content[0].text.split('\n')[0], again.content[0].text.split('\n')[0]);
+
+    const listed = await client.call('list_ports', { environment: 'ws-1' });
+    assert.equal(listed.content[0].text.trim().split('\n').length, 1);
+    assert.match(listed.content[0].text, /^3000\s+https:/);
+  });
+});
+
+test('expose_port reports a port nothing is listening on', async () => {
+  // Exit 1 is the probe's "connected to nothing", and the reason the stub
+  // grew an exact exit code: a blanket non-zero cannot tell that apart from
+  // a probe that could not run at all.
+  await withServer({ execExitCode: 1 }, async (client) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+    const result = await client.call('expose_port', { environment: 'ws-1', port: 8080 });
+    assert.match(result.content[0].text, /NOTHING IS LISTENING on 8080/);
+    // Still a success: the share exists, and the caller is told what to do.
+    assert.notEqual(result.isError, true);
+    assert.match(result.content[0].text, /is open at/);
+  });
+});
+
+test('a probe that cannot run says so, and never calls the port dead', async () => {
+  // 127 is `command not found` — the probe did not run, which is NOT evidence
+  // that nothing is listening. Reporting it as dead would send an agent to
+  // restart a server that was serving perfectly well.
+  await withServer({ execExitCode: 127 }, async (client) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+    const result = await client.call('expose_port', { environment: 'ws-1', port: 8080 });
+    assert.match(result.content[0].text, /could not check whether anything is listening/);
+    assert.doesNotMatch(result.content[0].text, /NOTHING IS LISTENING/);
+  });
+});
+
+test('revoke_port closes it, and the closed one stops being listed', async () => {
+  await withServer({}, async (client) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+    await client.call('expose_port', { environment: 'ws-1', port: 3000, check: false });
+
+    const revoked = await client.call('revoke_port', { environment: 'ws-1', port: 3000 });
+    assert.match(revoked.content[0].text, /port 3000 is closed in ws-1/);
+    assert.match(revoked.content[0].text, /mints a new one/);
+
+    const listed = await client.call('list_ports', { environment: 'ws-1' });
+    assert.match(listed.content[0].text, /no ports are open in ws-1/);
+
+    // A second revoke is a refusal the model can read, not a crash.
+    const twice = await client.call('revoke_port', { environment: 'ws-1', port: 3000 });
+    assert.equal(twice.isError, true);
+  });
+});
+
+test('pause_environment seals a running environment, and is honest when there is nothing to seal', async () => {
+  await withServer({}, async (client, stub) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+
+    const paused = await client.call('pause_environment', { environment: 'ws-1' });
+    assert.match(paused.content[0].text, /is saving its disk and stopping/);
+    // The sentence an agent has to act on: its server is gone.
+    assert.match(paused.content[0].text, /with nothing running inside it/);
+    const release = stub.state.calls.find((c) => c.path.endsWith('/release'));
+    assert.equal(release.body.fencing_token, 7);
+    // Never a discard: this surface has no verb meaning "throw the work away".
+    assert.equal(release.body.discard, false);
+  });
+
+  // Already paused is not an error, and must not send a release at all.
+  await withServer({ wsState: 'paused' }, async (client, stub) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+    const again = await client.call('pause_environment', { environment: 'ws-1' });
+    assert.match(again.content[0].text, /already paused/);
+    assert.equal(stub.state.calls.some((c) => c.path.endsWith('/release')), false);
+  });
+});
+
+test('get_environment reports whether it is running', async () => {
+  await withServer({}, async (client) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_environment', { name: 'app' });
+    const info = await client.call('get_environment', { environment: 'ws-1' });
+    assert.match(info.content[0].text, /state: running/);
+    assert.match(info.content[0].text, /spends a credit a minute/);
+  });
+});
+
 test('an unknown tool is a protocol error, not a tool result', async () => {
   await withServer({}, async (client) => {
     await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
-    const response = await client.send('tools/call', { name: 'expose_port', arguments: {} });
+    // `start_agent`, not `expose_port`: the latter is a real tool now, and a
+    // negative test naming a shipped tool passes for the wrong reason.
+    const response = await client.send('tools/call', { name: 'start_agent', arguments: {} });
     assert.ok(response.error, 'a tool this server never advertised must not answer as a tool');
     assert.equal(response.error.code, -32602);
   });

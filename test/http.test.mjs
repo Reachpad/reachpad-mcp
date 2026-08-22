@@ -59,7 +59,10 @@ test('a connector can handshake and call a tool over HTTP', async () => {
     assert.equal(body.result.serverInfo.name, 'reachpad');
 
     const listed = await (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json();
-    assert.equal(listed.result.tools.length, 7);
+    // The COUNT only, deliberately: this test is about the HTTP transport
+    // carrying the same surface stdio does, and `protocol.test.mjs` is where
+    // the names are pinned. Update both when a tool is added.
+    assert.equal(listed.result.tools.length, 11);
 
     const called = await (
       await rpc({
