@@ -128,19 +128,25 @@ export function buildTools(client) {
       },
       async handler({ environment }) {
         const body = await client.lineage(environment);
-        const head = body.head ?? null;
+        // `head_snapshot`, which is what GET /v1/workspaces/:id/lineage
+        // actually answers with. Reading `head` meant this branch never fired:
+        // EVERY environment reported "never sealed", including ones with forks
+        // hanging off a snapshot, which the fork route refuses to make without
+        // one. The stub returned the wrong key too, so the tests agreed with
+        // the bug — hence `sealedHeadIsRead` below, which pins the key name.
+        const head = body.head_snapshot ?? null;
         const lines = [`environment ${environment}`];
         if (!head) {
           lines.push('never sealed — the next command cold-boots it');
         } else {
           // A snapshot is a disk image and there is no other kind: memory
           // snapshotting was removed outright and every start is a cold boot
-          // (fleet ADR-0104). The `disk+mem` branch this replaced told agents
-          // a resumed environment came back mid-process, which shaped how they
-          // planned long runs.
-          const kind = head.kind ?? 'unknown';
-          lines.push(`head snapshot is ${kind} — the next command boots from it`);
-          if (head.log_seq !== undefined) lines.push(`at log seq ${head.log_seq}`);
+          // (fleet ADR-0104), which also deleted the `kind` field this used to
+          // branch on. Say what the agent needs to plan around instead.
+          const at = head.log_seq === undefined ? '' : ` at log seq ${head.log_seq}`;
+          lines.push(
+            `boots from ${head.id}${at} — files survive, running processes do not`,
+          );
         }
         const forks = body.forks ?? [];
         const ancestors = body.ancestors ?? [];
