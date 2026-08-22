@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { render } from '../src/errors.js';
 import { _internal, buildTools } from '../src/tools.js';
 import { resolveEndpoint } from '../src/client.js';
+import { readFile } from 'node:fs/promises';
 
 const { tail, renderExec, cloneScript, shellQuote } = _internal;
 
@@ -154,4 +155,37 @@ test('an environment with no head says so, and says it cold-boots', async () => 
   const text = await inspect.handler({ environment: 'ws-2' });
   assert.match(text, /never sealed/);
   assert.match(text, /cold-boots/);
+});
+
+/**
+ * Every version literal in the repository names the same release.
+ *
+ * `package.json` is the one the publish workflow checks against the tag, and
+ * `server.json` carries the version TWICE more — once at the top level and
+ * once inside `packages[0]` — for the MCP registry. Nothing compared them, so
+ * a release could ship an npm tarball at one version and tell the registry a
+ * different one, which is a listing that installs something other than what
+ * it advertises.
+ *
+ * This is the same defect `#7` fixed inside `src/`: a second literal that
+ * agrees by hand until the day it does not.
+ */
+test('every version literal names the same release', async () => {
+  const read = async (name) =>
+    JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), 'utf8'));
+  const pkg = await read('package.json');
+  const server = await read('server.json');
+
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'package.json carries a plain semver');
+  assert.equal(server.version, pkg.version, 'server.json top-level version');
+  assert.equal(
+    server.packages[0].version,
+    pkg.version,
+    'server.json packages[0].version — the one an installer actually resolves',
+  );
+  assert.equal(
+    server.packages[0].identifier,
+    pkg.name,
+    'the registry must point at the package this repository publishes',
+  );
 });
