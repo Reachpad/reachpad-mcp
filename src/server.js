@@ -12,13 +12,27 @@
  *   REACHPAD_API_KEY         rpak1.… — optional; used for run_command.
  */
 
+import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { ControlClient } from './client.js';
 import { buildTools } from './tools.js';
 import { ApiError } from './errors.js';
 
 const PROTOCOL_VERSION = '2025-06-18';
-const SERVER_INFO = { name: 'reachpad', version: '0.1.0' };
+
+/*
+ * The version is read from package.json rather than written here twice. It had
+ * drifted to three different answers: this literal said 0.1.0, package.json
+ * said 0.2.0 and the latest on npm was 0.1.5, so every client was told 0.1.0
+ * no matter which build it was talking to. package.json ships in the tarball
+ * whatever the files list says, so this resolves in the published package too.
+ */
+const SERVER_INFO = {
+  name: 'reachpad',
+  version: JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  ).version,
+};
 
 export function createServer({ env = process.env, fetchImpl } = {}) {
   const client = new ControlClient({
