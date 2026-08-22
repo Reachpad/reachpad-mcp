@@ -4,7 +4,7 @@
   "mcpName": "io.github.Reachpad/reachpad-mcp",
   "description": "Development infrastructure for coding agents: persistent cloud environments they create, operate and test software in, over API, MCP or CLI.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "homepage": "https://reachpad.dev",
   "repository": {
     "type": "git",
