@@ -64,7 +64,11 @@ test('live: the control plane answers the shapes this server reads', { skip: !co
     const ran = await call('run_command', {
       environment: id,
       argv: ['/bin/sh', '-lc', 'echo mcp-live-ok && id -u'],
-      timeout_ms: 5_000,
+      // Sixty seconds, not five. This environment has never run, so this
+      // command pays for a COLD BOOT before the shell starts — measured at
+      // ~4.7 s unloaded, and this box is simultaneously the only fleet node.
+      // At five it was the timeout under test rather than the exec.
+      timeout_ms: 60_000,
     });
     const text = ran.content[0].text;
     if (!ran.isError) {
@@ -78,8 +82,56 @@ test('live: the control plane answers the shapes this server reads', { skip: !co
       assert.doesNotMatch(text, /exit 0/, 'a missing terminal event must never read as success');
       console.log(`live: no terminal event, reported as unknown — ${text.split('\n')[0]}`);
     }
+
+    // --- the hosting arc, against the real preview plane -----------------
+    //
+    // The whole point of the port tools: something built in here becomes
+    // something a person can open. Every assertion below is about a SHAPE
+    // controld actually sends, which is the one thing the stub cannot prove.
+    const exposed = await call('expose_port', { environment: id, port: 8080, check: false });
+    if (!exposed.isError) {
+      assert.match(exposed.content[0].text, /port 8080 in \S+ is open/, exposed.content[0].text);
+      // Idempotent per live (workspace, port), server-side. Two calls, one link.
+      const again = await call('expose_port', { environment: id, port: 8080, check: false });
+      assert.equal(
+        exposed.content[0].text.split('\n')[0],
+        again.content[0].text.split('\n')[0],
+        're-exposing an open port must return the SAME link, not a second one',
+      );
+
+      const ports = await call('list_ports', { environment: id });
+      assert.match(ports.content[0].text, /^8080\s/m, ports.content[0].text);
+
+      const revoked = await call('revoke_port', { environment: id, port: 8080 });
+      assert.equal(revoked.isError, false, revoked.content[0].text);
+      const empty = await call('list_ports', { environment: id });
+      assert.match(empty.content[0].text, /no ports are open/, empty.content[0].text);
+      console.log('live: expose → list → revoke, against the real preview plane');
+    } else {
+      // A fleet with no preview origin configured refuses legibly; that is a
+      // deployment fact, not a broken tool, and it must not read as success.
+      assert.match(exposed.content[0].text, /\[\d{3} \w+\]/, exposed.content[0].text);
+      console.log(`live: port shares refused, legibly — ${exposed.content[0].text.split('\n')[0]}`);
+    }
   } finally {
-    const deleted = await call('delete_environment', { environment: id });
+    // Pause BEFORE archive, and this ordering is the test's own history: a
+    // running workspace holds a lease, and `archive` answers `409 lease_held`
+    // — "release or pause the workspace before archiving it". This suite used
+    // to end on that refusal every time it got as far as running a command,
+    // because the surface had no verb that could clear it. `pause_environment`
+    // is that verb, and this is the arc that could not complete without it.
+    const paused = await call('pause_environment', { environment: id });
+    assert.equal(paused.isError, false, paused.content[0].text);
+    console.log(`live: ${paused.content[0].text.split(';')[0]}`);
+
+    // Sealing is not instant, and archive refuses until the lease is gone.
+    let deleted;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      deleted = await call('delete_environment', { environment: id });
+      if (!deleted.isError) break;
+      if (!/lease_held/.test(deleted.content[0].text)) break;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
     assert.equal(deleted.isError, false, deleted.content[0].text);
   }
 });

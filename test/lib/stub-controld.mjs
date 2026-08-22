@@ -94,6 +94,69 @@ export async function startStubControld(options = {}) {
       return send(200, { workspaces: rows });
     }
 
+    // --- GET /v1/workspaces/:id — state, and the lease if one is held ----
+    const bare = url.pathname.match(/^\/v1\/workspaces\/([^/]+)$/);
+    if (bare && req.method === 'GET') {
+      const ws = state.workspaces.get(bare[1]);
+      if (!ws) return send(404, { error: 'workspace_not_found' });
+      const wsState = state.wsState ?? (ws.archived ? 'archived' : 'running');
+      return send(200, {
+        workspace: { id: ws.id, name: ws.name },
+        state: wsState,
+        // The fencing token is reported only to a caller the server also
+        // authorizes to write, so a test for "no write access" withholds it.
+        lease:
+          wsState === 'running'
+            ? { node: 'node-1', fencing_token: state.fencingToken ?? 7 }
+            : null,
+      });
+    }
+
+    // --- port shares (ADR-0103) ------------------------------------------
+    // Hyphenated, and one of them has a second path segment, so neither
+    // reaches the `(\w+)$` verb matcher below. Modelled on the real routes:
+    // create is idempotent per live (workspace, port) and hands the SAME
+    // token back on a replay, list omits revoked rows, and a revoked token
+    // never resurrects.
+    const portShare = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/port-shares(\/revoke)?$/);
+    if (portShare) {
+      const [, id, isRevoke] = portShare;
+      const ws = state.workspaces.get(id);
+      if (!ws) return send(404, { error: 'workspace_not_found' });
+      state.portShares ??= new Map();
+      const live = state.portShares.get(id) ?? [];
+
+      if (req.method === 'GET') {
+        return send(200, {
+          port_shares: live.filter((s) => !s.revoked).map((s) => shareJson(s)),
+        });
+      }
+      if (req.method === 'POST' && !isRevoke) {
+        if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+          return send(400, { error: 'invalid_port' });
+        }
+        const existing = live.find((s) => s.port === body.port && !s.revoked);
+        if (existing) return send(200, { port_share: shareJson(existing) });
+        const share = {
+          token: `token-${state.nextId++}`,
+          workspace_id: id,
+          port: body.port,
+          created_at_ms: 1,
+          revoked: false,
+        };
+        live.push(share);
+        state.portShares.set(id, live);
+        return send(201, { port_share: shareJson(share) });
+      }
+      if (req.method === 'POST' && isRevoke) {
+        const share = live.find((s) => s.port === body.port && !s.revoked);
+        if (!share) return send(404, { error: 'port_share_not_found' });
+        share.revoked = true;
+        return send(200, { port_share: shareJson(share, false), revoked_at_ms: 2 });
+      }
+      return send(404, { error: 'no_such_route' });
+    }
+
     const match = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/(\w+)$/);
     if (match) {
       const [, id, verb] = match;
@@ -117,6 +180,14 @@ export async function startStubControld(options = {}) {
         state.workspaces.set(forkId, { id: forkId, name: body.name ?? 'fork', forks: [], archived: false });
         ws.forks.push({ id: forkId });
         return send(201, { workspace: { id: forkId } });
+      }
+      if (verb === 'release') {
+        if (!ws) return send(404, { error: 'workspace_not_found' });
+        if (body.fencing_token !== (state.fencingToken ?? 7)) {
+          return send(409, { error: 'stale_fencing_token' });
+        }
+        state.wsState = 'sealing';
+        return send(200, { released: false, sealing: true });
       }
       if (verb === 'archive') {
         if (!ws) return send(404, { error: 'workspace_not_found' });
@@ -171,6 +242,24 @@ function handleExec(state, body, res, send) {
 
   const argv = body.argv ?? [];
   const script = argv.join(' ');
+
+  // An EXACT exit code, for callers that read one rather than just "non-zero".
+  // The port probe is the case: 0 is listening, 1 is nothing answered, and
+  // anything else means the probe itself could not run — three outcomes the
+  // blanket 128 below cannot express.
+  if (typeof state.execExitCode === 'number') {
+    line({
+      ev: 'exec.end',
+      exec_id: 'e-1',
+      exit_code: state.execExitCode,
+      signal: null,
+      duration_ms: 7,
+      truncated: false,
+      timed_out: false,
+    });
+    return res.end();
+  }
+
   const failing = state.execBehaviour === 'nonzero' || /false|exit 1/.test(script);
   const cloneFails = state.cloneFails && /git clone/.test(script);
 
@@ -194,6 +283,23 @@ function handleExec(state, body, res, send) {
 }
 
 const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
+
+/**
+ * A port share as the caller sees it. `url` is present only when the
+ * deployment knows where the preview plane lives, and NEVER on a revoked
+ * record — echoing a link back beside the word "revoked" is how a person
+ * retries a dead one.
+ */
+function shareJson(share, withUrl = true) {
+  const out = {
+    token: share.token,
+    workspace_id: share.workspace_id,
+    port: share.port,
+    created_at_ms: share.created_at_ms,
+  };
+  if (withUrl) out.url = `https://app.example.test/${share.token}`;
+  return out;
+}
 
 async function readJson(req) {
   const chunks = [];

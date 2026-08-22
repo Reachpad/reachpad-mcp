@@ -1,12 +1,20 @@
 /**
  * The agent-facing surface (ADR-0066 §4). SMALLER than the API on purpose:
- * seven tools, each a translation of routes that exist today. Nothing here
+ * eleven tools, each a translation of routes that exist today. Nothing here
  * advertises a capability the fleet does not have — a tool that always fails
  * costs a model a turn and teaches it to distrust the rest.
  *
- * Deliberately absent, and named in the README so their absence is a decision
- * rather than an oversight: `expose_port` (needs the `tcp` channel kind, ADR
- * §6) and `start_agent` (needs a harness route, ADR §5).
+ * `expose_port` used to be listed here as deliberately absent, "needs the
+ * `tcp` channel kind, ADR §6". That kind shipped (`ChannelKind::Tcp(port)`,
+ * ADR-0103), `reachpad ports expose` has been live in the CLI since 0.4.0,
+ * and the note outlived its reason — so an agent could build a working app
+ * over this server and had no way at all to publish it. The three `*_port`
+ * tools below close that, against the same
+ * `/v1/workspaces/:id/port-shares` routes the CLI uses.
+ *
+ * Still deliberately absent, and named in the README so its absence is a
+ * decision rather than an oversight: `start_agent` (needs a harness route,
+ * ADR §5).
  */
 
 const OUTPUT_BUDGET = 4_000;
@@ -68,7 +76,7 @@ export function buildTools(client) {
           },
           repo: {
             type: 'string',
-            description: 'Optional git URL to clone into /work. Must be reachable without credentials unless the account has a mirror for it.',
+            description: 'Optional git URL to clone into `$HOME/work` inside the environment. Must be reachable without credentials unless the account has a mirror for it.',
           },
           ref: { type: 'string', description: 'Optional branch or tag to check out.' },
         },
@@ -80,10 +88,14 @@ export function buildTools(client) {
         if (repo) {
           const argv = ['/bin/sh', '-lc', cloneScript(repo, ref)];
           const result = await client.exec(created.id, { argv, timeoutMs: 300_000 });
+          // The clone script's last line is the resolved path. Report THAT,
+          // not the path this file hoped for: `cwd` on the next `run_command`
+          // is the only thing the caller can do with this sentence.
+          const where = result.stdout.trim().split('\n').pop() || '$HOME/work';
           lines.push(
             result.exit_code === 0
-              ? `cloned ${repo}${ref ? ` at ${ref}` : ''} into /work`
-              : `clone FAILED — the environment exists and is usable, but /work is not populated:\n${renderExec(result)}`,
+              ? `cloned ${repo}${ref ? ` at ${ref}` : ''} into ${where} — pass that as \`cwd\` to run_command`
+              : `clone FAILED — the environment exists and is usable, but the source is not there:\n${renderExec(result)}`,
           );
         }
         return lines.join('\n');
@@ -136,6 +148,20 @@ export function buildTools(client) {
         // the bug — hence `sealedHeadIsRead` below, which pins the key name.
         const head = body.head_snapshot ?? null;
         const lines = [`environment ${environment}`];
+        // State first, because it is the one line that changes what the
+        // caller does next — and this is the only tool that reports it.
+        // Never fatal: a fleet that does not serve the status route can still
+        // answer the lineage question this tool exists for.
+        try {
+          const status = await client.workspaceStatus(environment);
+          lines.push(
+            status.state === 'running'
+              ? 'state: running — it holds a plan slot and spends a credit a minute'
+              : `state: ${status.state}`,
+          );
+        } catch {
+          /* not fatal — see above */
+        }
         if (!head) {
           lines.push('never sealed — the next command cold-boots it');
         } else {
@@ -206,11 +232,138 @@ export function buildTools(client) {
     },
 
     {
+      name: 'expose_port',
+      title: 'Expose a port to the web',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      description:
+        'Open a port inside an environment and get back a link that reaches it. This is how something you built becomes something a person can open. Idempotent per port: re-running it returns the link the port already has.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          environment: { type: 'string' },
+          port: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 65535,
+            description: 'The port your app is listening on INSIDE the environment.',
+          },
+          check: {
+            type: 'boolean',
+            description:
+              'Dial the port inside the environment afterwards and say whether anything answered. Default true. It costs one short command, and it RESUMES the environment if it was paused — pass false if you are opening a port ahead of starting the server.',
+          },
+        },
+        required: ['environment', 'port'],
+        additionalProperties: false,
+      },
+      async handler({ environment, port, check = true }) {
+        const share = await client.createPortShare(environment, port);
+        const lines = [
+          share.url
+            ? `port ${share.port} in ${environment} is open at ${share.url}`
+            : `port ${share.port} in ${environment} is open (token ${share.token}) — this deployment reports no preview origin, so there is no link to hand out`,
+        ];
+        if (check) {
+          const state = await probePort(client, environment, share.port);
+          if (state === 'silent') {
+            lines.push(
+              `NOTHING IS LISTENING on ${share.port} right now. The link resolves, and a visitor gets an error page rather than your app. Start the server, then this same link serves it — no new link is needed.`,
+            );
+          } else if (state === 'unknown') {
+            lines.push(`(could not check whether anything is listening on ${share.port})`);
+          }
+        }
+        lines.push(
+          'Who can open it: anyone who has the link AND is signed in to Reachpad. It is not a private URL and not a secure one — treat it like a preview deployment. It carries no port, no environment id and no account name.',
+        );
+        lines.push(
+          'What breaks it: a running process does NOT survive a pause. After a pause the environment cold-boots, files intact and nothing running, and the link answers with an error until you start the app again on the same port. A visitor’s request wakes a paused environment but does not restart anything in it.',
+        );
+        return lines.join('\n');
+      },
+    },
+
+    {
+      name: 'list_ports',
+      title: 'List exposed ports',
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      description:
+        'The ports this environment has open to the web, oldest first, with their links. Revoked ports are not listed: a closed link never comes back.',
+      inputSchema: {
+        type: 'object',
+        properties: { environment: { type: 'string' } },
+        required: ['environment'],
+        additionalProperties: false,
+      },
+      async handler({ environment }) {
+        const shares = await client.listPortShares(environment);
+        if (!shares.length) return `no ports are open in ${environment}`;
+        return shares
+          .map((s) => `${s.port}  ${s.url ?? `(token ${s.token})`}`)
+          .join('\n');
+      },
+    },
+
+    {
+      name: 'revoke_port',
+      title: 'Close an exposed port',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      description:
+        'Close one port to the web. The link stops working at the visitor’s next request. NOT reversible in the way callers expect: re-opening the same port later mints a DIFFERENT link, so revoke only when the people holding the current one should lose it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          environment: { type: 'string' },
+          port: { type: 'integer', minimum: 1, maximum: 65535 },
+        },
+        required: ['environment', 'port'],
+        additionalProperties: false,
+      },
+      async handler({ environment, port }) {
+        await client.revokePortShare(environment, port);
+        return `port ${port} is closed in ${environment}; the link that reached it stops working at the next request, and re-opening this port mints a new one`;
+      },
+    },
+
+    {
+      name: 'pause_environment',
+      title: 'Pause environment',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      description:
+        "Save the environment's disk and stop the meter. Files survive; RUNNING PROCESSES DO NOT \u2014 a paused environment cold-boots, so anything you started with run_command has to be started again. The next run_command resumes it automatically. Pause when you are done: a running environment spends a credit a minute whether or not anything is happening in it, and it cannot be archived while it runs.",
+      inputSchema: {
+        type: 'object',
+        properties: { environment: { type: 'string' } },
+        required: ['environment'],
+        additionalProperties: false,
+      },
+      async handler({ environment }) {
+        const status = await client.workspaceStatus(environment);
+        if (status.state === 'paused') return `environment ${environment} is already paused`;
+        if (status.state === 'sealing') return `environment ${environment} is already saving`;
+        if (status.state === 'archived') {
+          return `environment ${environment} is archived \u2014 there is nothing running to pause`;
+        }
+        if (status.state === 'never_started') {
+          return `environment ${environment} has never run, so there is nothing to save`;
+        }
+        const fencingToken = status.lease?.fencingToken;
+        if (!fencingToken) {
+          // The token is reported only to a caller the server also authorizes
+          // to WRITE, so its absence is an authority answer, not a race.
+          return `environment ${environment} reports no lease this credential may release \u2014 it needs write access`;
+        }
+        await client.release(environment, fencingToken);
+        return `environment ${environment} is saving its disk and stopping; the next run_command resumes it, with nothing running inside it`;
+      },
+    },
+
+    {
       name: 'delete_environment',
       title: 'Archive environment',
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
       description:
-        'Archive an environment, freeing the plan slot it holds. Nothing is deleted: its snapshots and history survive, it simply stops counting as live and can no longer be used.',
+        'Archive an environment, freeing the plan slot it holds. Nothing is deleted: its snapshots and history survive, it simply stops counting as live and can no longer be used. A RUNNING environment cannot be archived \u2014 pause_environment first, or this is refused with `lease_held`.',
       inputSchema: {
         type: 'object',
         properties: { environment: { type: 'string' } },
@@ -226,14 +379,62 @@ export function buildTools(client) {
 }
 
 /**
- * Clone into /work. `set -e` so a failed clone is a failed exec rather than a
- * zero exit on an empty directory, which is the failure mode that makes an
- * agent spend ten minutes debugging a build in a directory with no source.
+ * Is anything actually listening on `port` inside the environment?
+ *
+ * The dial is the one hub itself makes — a TCP connect to `127.0.0.1:<port>`
+ * in the guest (`ChannelKind::Tcp`) — so a pass here means a visitor's
+ * request reaches something, not merely that a process exists. `ss` is the
+ * fallback for an image without python3; a listener bound to one interface
+ * shows up in both.
+ *
+ * Best-effort by construction. Every failure that is not a clean "nothing
+ * answered" reports `unknown`: a probe that cannot run is not evidence that
+ * the port is dead, and saying so would be worse than saying nothing.
+ *
+ * @returns {Promise<'listening'|'silent'|'unknown'>}
+ */
+async function probePort(client, environment, port) {
+  const script =
+    `if command -v python3 >/dev/null 2>&1; then ` +
+    `python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); ` +
+    `sys.exit(0 if s.connect_ex(("127.0.0.1",${port}))==0 else 1)'; ` +
+    `else ss -ltn 2>/dev/null | grep -q ":${port} "; fi`;
+  try {
+    const result = await client.exec(environment, {
+      argv: ['/bin/sh', '-lc', script],
+      timeoutMs: 15_000,
+    });
+    if (result.exit_code === 0) return 'listening';
+    if (result.exit_code === 1) return 'silent';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Clone into `$HOME/work`, and NEVER into `/work`.
+ *
+ * This used to say `/work`, and it could not have worked once: the guest
+ * rootfs is mounted `ro` (`/dev/root / ext4 ro`), so `mkdir -p /work` failed
+ * with "Read-only file system" on every environment this server has ever
+ * created — the first move an agent makes, broken 100% of the time. The one
+ * writable surface that survives a pause is the workspace disk, mounted at
+ * `/mnt` and at `$HOME`; `$HOME` is where a person's files already are.
+ *
+ * `$HOME` rather than a literal `/root`: the guest's home is `workspaced`'s
+ * decision, not this client's, and it moves.
+ *
+ * `set -e` so a failed clone is a failed exec rather than a zero exit on an
+ * empty directory, which is the failure mode that makes an agent spend ten
+ * minutes debugging a build in a directory with no source. The last line
+ * prints the resolved path so the caller can report where the source
+ * actually landed rather than where it hoped to put it.
  */
 function cloneScript(repo, ref) {
   const quoted = shellQuote(repo);
-  const checkout = ref ? ` && git -C /work checkout ${shellQuote(ref)}` : '';
-  return `set -e; mkdir -p /work; git clone ${quoted} /work${checkout}`;
+  const checkout = ref ? ` && git -C "$HOME/work" checkout ${shellQuote(ref)}` : '';
+  return `set -e; mkdir -p "$HOME/work"; git clone ${quoted} "$HOME/work"${checkout}; printf '%s\\n' "$HOME/work"`;
 }
 
 /** Single-quote for /bin/sh, escaping embedded quotes. */
@@ -241,4 +442,4 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-export const _internal = { tail, renderExec, cloneScript, shellQuote };
+export const _internal = { tail, renderExec, cloneScript, shellQuote, probePort };

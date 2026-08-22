@@ -267,6 +267,116 @@ export class ControlClient {
     });
   }
 
+  /**
+   * `GET /v1/workspaces/:id` — state, and the lease if one is held.
+   *
+   * The only route that reports whether an environment is RUNNING. `lineage`
+   * answers what it boots from, and `list` answers what exists; neither
+   * answers the question a caller about to pause, archive or share a port
+   * actually has.
+   */
+  async workspaceStatus(workspace) {
+    const biscuit = await this.biscuitFor(workspace);
+    const body = await this.request('GET', `/v1/workspaces/${encodeURIComponent(workspace)}`, {
+      bearer: biscuit,
+    });
+    return {
+      id: body.workspace?.id ?? workspace,
+      name: body.workspace?.name ?? '',
+      state: body.state ?? 'unknown',
+      lease: body.lease
+        ? {
+            node: body.lease.node ?? '',
+            fencingToken: body.lease.fencing_token ?? null,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * `POST /v1/workspaces/:id/release` — end the lease, sealing first.
+   *
+   * The fencing token is not optional and not guessable: it comes from the
+   * status read immediately before (I2). A stale one is refused rather than
+   * applied, which is the whole point of it — two callers racing to pause the
+   * same workspace must not both succeed.
+   *
+   * `discard` is never set true here. The MCP surface has no verb that means
+   * "throw away everything since the last save", and adding one by default
+   * argument is how an agent loses a customer's work.
+   */
+  async release(workspace, fencingToken) {
+    const biscuit = await this.biscuitFor(workspace);
+    return this.request('POST', `/v1/workspaces/${encodeURIComponent(workspace)}/release`, {
+      body: { biscuit, fencing_token: fencingToken, discard: false },
+    });
+  }
+
+  /**
+   * `POST /v1/workspaces/:id/port-shares` — open a port to the preview plane.
+   *
+   * Naturally idempotent per live `(workspace, port)`: a second call for a
+   * port that is already open returns the SAME token rather than minting a
+   * second one, so it is safe to re-run when the state is unknown.
+   */
+  async createPortShare(workspace, port) {
+    const { bearer, biscuit } = await this.portShareAuth(workspace);
+    const body = await this.request(
+      'POST',
+      `/v1/workspaces/${encodeURIComponent(workspace)}/port-shares`,
+      { body: { ...(biscuit ? { biscuit } : {}), port }, bearer },
+    );
+    const share = body.port_share;
+    if (!share) throw new Error('unexpected response shape: port_share missing');
+    return share;
+  }
+
+  /**
+   * `GET /v1/workspaces/:id/port-shares` — the LIVE shares, oldest first.
+   *
+   * Unlike its two siblings this route reads the Biscuit off the header, not
+   * the body: it is a GET and has none. Getting that wrong is a
+   * `400 bad_token_encoding`, which reads like a broken credential rather
+   * than a misplaced one.
+   */
+  async listPortShares(workspace) {
+    const { bearer, biscuit } = await this.portShareAuth(workspace);
+    const body = await this.request(
+      'GET',
+      `/v1/workspaces/${encodeURIComponent(workspace)}/port-shares`,
+      { bearer: bearer ?? biscuit },
+    );
+    return body.port_shares ?? [];
+  }
+
+  /** `POST /v1/workspaces/:id/port-shares/revoke` — close one port. */
+  async revokePortShare(workspace, port) {
+    const { bearer, biscuit } = await this.portShareAuth(workspace);
+    return this.request(
+      'POST',
+      `/v1/workspaces/${encodeURIComponent(workspace)}/port-shares/revoke`,
+      { body: { ...(biscuit ? { biscuit } : {}), port }, bearer },
+    );
+  }
+
+  /**
+   * How the three port-share routes authenticate, which is not how the rest
+   * of this client does.
+   *
+   * They accept an `rpak1.…` key off the HEADER and mint a Biscuit from it
+   * server-side (`port_shares.rs::credential`), so a deployment holding only
+   * `REACHPAD_API_KEY` — no identity credential at all — can still open a
+   * port. Falling through to `biscuitFor` in that case would fail at the
+   * identity exchange rather than at the thing the caller asked for.
+   *
+   * The key must carry `--role owner`. A `collaborator` key is refused with
+   * `not_owner`: listing hands back live tokens, which are capabilities.
+   */
+  async portShareAuth(workspace) {
+    if (this.apiKey) return { bearer: this.apiKey, biscuit: null };
+    return { bearer: undefined, biscuit: await this.biscuitFor(workspace) };
+  }
+
   /** POST /v1/workspaces/:id/archive */
   async archive(workspace) {
     const biscuit = await this.biscuitFor(workspace);

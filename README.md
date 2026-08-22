@@ -74,17 +74,41 @@ escalation nobody chose to perform.
 | tool | what it does |
 |---|---|
 | `get_credit_balance()` | remaining compute credits. One credit runs one standard environment for one minute. |
-| `create_environment(repo?, ref?, name?)` | a new environment, optionally with a repository cloned into `/work`. Reachpad generates its display name when omitted. |
+| `create_environment(repo?, ref?, name?)` | a new environment, optionally with a repository cloned into `$HOME/work`. Reachpad generates its display name when omitted. |
 | `list_environments()` | your environments and how many forks each has |
 | `get_environment(environment)` | what it boots from: its head snapshot, its log position and its fork tree |
 | `run_command(environment, argv, cwd?, env?, timeout_ms?)` | one command, its exit code and its output. A paused environment resumes to serve it. |
 | `checkpoint_environment(environment, name?)` | fork from the last sealed snapshot; the original is untouched |
+| `expose_port(environment, port, check?)` | open a port to the web and get the link that reaches it. Idempotent per port. |
+| `list_ports(environment)` | the ports this environment has open, oldest first, with their links |
+| `revoke_port(environment, port)` | close one port. Re-opening it later mints a **different** link. |
 | `delete_environment(environment)` | archive it and free the plan slot. Nothing is deleted — snapshots and history survive. |
 
-**Not here, deliberately:** exposing a port and starting an agent inside the
-environment. Both are in reachpad's roadmap and neither is in the fleet yet — a
-tool that always fails costs a model a turn and teaches it to distrust the rest,
-so this server advertises nothing it cannot serve.
+**Not here, deliberately:** starting an agent inside the environment. It is in
+reachpad's roadmap and not in the fleet yet — a tool that always fails costs a
+model a turn and teaches it to distrust the rest, so this server advertises
+nothing it cannot serve.
+
+### What a port link is, and is not
+
+Worth reading before you hand one to somebody, because none of it is
+discoverable from the URL:
+
+- **Anyone signed in to Reachpad who has the link can open it.** It is not a
+  private URL and not a secure one. Treat it like a preview deployment.
+- **The link is an address, not a copy.** Restart the app on the same port and
+  the same link serves the new version.
+- **A running process does not survive a pause.** The environment cold-boots
+  with its files intact and nothing running, so after a pause the link answers
+  with an error until something is listening on that port again. A visitor's
+  request wakes a paused environment; it does not restart anything inside it.
+- **`expose_port` dials the port afterwards** and tells you if nothing
+  answered, because a link to a port nothing is serving looks exactly like a
+  link that works. Pass `check: false` to skip it — the dial resumes a paused
+  environment.
+- **With only `REACHPAD_API_KEY`, the key must be `--role owner`.** A
+  `collaborator` key is refused: listing hands back live tokens, and a token is
+  a capability.
 
 ## The rules it is built to
 
