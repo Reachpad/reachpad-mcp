@@ -106,7 +106,7 @@ export async function startStubControld(options = {}) {
       if (verb === 'lineage') {
         if (!ws) return send(404, { error: 'workspace_not_found' });
         return send(200, {
-          head: state.head ?? { kind: 'disk+mem', log_seq: 42 },
+          head: state.head ?? { kind: 'disk', log_seq: 42 },
           forks: ws.forks,
           ancestors: [],
         });

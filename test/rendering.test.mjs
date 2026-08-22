@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { render } from '../src/errors.js';
-import { _internal } from '../src/tools.js';
+import { _internal, buildTools } from '../src/tools.js';
 import { resolveEndpoint } from '../src/client.js';
 
 const { tail, renderExec, cloneScript, shellQuote } = _internal;
@@ -99,4 +99,31 @@ test('endpoint resolution refuses plaintext to anywhere but loopback', () => {
   assert.equal(resolveEndpoint('http://127.0.0.1:7401'), 'http://127.0.0.1:7401');
   assert.throws(() => resolveEndpoint('http://example.com'), /refusing plaintext/);
   assert.throws(() => resolveEndpoint(''), /no endpoint/);
+});
+
+test('inspecting an environment never promises a mid-process resume', async () => {
+  // Memory snapshotting was removed from the fleet outright (ADR-0104) and
+  // every start is a cold boot. This tool's description and its rendering both
+  // used to tell an agent that a `disk+mem` head came back mid-process, which
+  // is the one fact that changes how an agent plans a long run: it decides
+  // whether pausing costs it the work in flight.
+  const tools = buildTools({
+    lineage: async () => ({ head: { kind: 'disk', log_seq: 42 }, forks: [], ancestors: [] }),
+  });
+  const inspect = tools.find((t) => t.name === 'get_environment');
+
+  assert.doesNotMatch(inspect.description, /memory|mid-process/i);
+  assert.match(inspect.description, /cold boot/i);
+
+  const text = await inspect.handler({ environment: 'ws-1' });
+  assert.doesNotMatch(text, /mid-process|disk\+mem/i);
+  assert.match(text, /boots from it/);
+});
+
+test('an environment with no head says so, and says it cold-boots', async () => {
+  const tools = buildTools({ lineage: async () => ({ head: null, forks: [], ancestors: [] }) });
+  const inspect = tools.find((t) => t.name === 'get_environment');
+  const text = await inspect.handler({ environment: 'ws-2' });
+  assert.match(text, /never sealed/);
+  assert.match(text, /cold-boots/);
 });
