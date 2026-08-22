@@ -2,8 +2,8 @@
 
 **Development infrastructure for coding agents.** A reachpad environment is a
 cloud development computer an agent operates itself: a repo, a filesystem,
-installed dependencies, background processes and build state that all survive
-between calls — not an ephemeral sandbox that forgets.
+installed dependencies and build state that all survive between calls — not an
+ephemeral sandbox that forgets. Processes are the exception; see below.
 
 This is the MCP server. It lets Claude, ChatGPT, Cursor, OpenCode or your own
 agent create an environment, run commands in it, fork it, and come back to it
@@ -14,8 +14,10 @@ later, without a developer keeping a laptop open for them.
   rebuilding. Processes are the exception: a start is always a cold boot.
 - **It forks.** Twenty attempts from one prepared state cost a delta each, not
   twenty rebuilds — because the environment is a snapshot chain, not a machine.
-- **It keeps secrets out of the box.** Credentials are injected at the
-  boundary; their values never enter the environment, the log or the store.
+- **It can keep secrets out of the box.** A brokered credential is called at
+  the boundary on your behalf and its value never enters the environment, the
+  log or the store. A credential written into the environment instead is
+  readable there, by design.
 - **It is agent-agnostic.** The REST API is canonical; this server, the SDK and
   the CLI are translations of it. Bring your own agent.
 
