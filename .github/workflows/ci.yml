@@ -28,7 +28,7 @@ jobs:
             const [p] = require("/tmp/pack.json");
             const files = p.files.map(f => f.path).sort();
             const expected = [
-              "README.md", "package.json", "src/server.d.ts",
+              "LICENSE", "README.md", "package.json", "src/server.d.ts",
               "src/client.js", "src/errors.js", "src/http.js",
               "src/server.js", "src/tools.js",
             ].sort();
