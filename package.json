@@ -1,8 +1,8 @@
 {
   "name": "@reachpad/mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "mcpName": "io.github.Reachpad/reachpad-mcp",
-  "description": "Development infrastructure for coding agents: persistent cloud environments they create, operate and test software in, over API, MCP or CLI.",
+  "description": "reachpad lets Claude, Codex and other coding agents build full-stack apps in persistent workspaces and share them by link, without a separate deployment.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://reachpad.dev",

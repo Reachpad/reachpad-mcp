@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.Reachpad/reachpad-mcp",
-  "description": "Persistent cloud development environments that coding agents create, run and test software in.",
-  "version": "0.3.0",
+  "description": "reachpad lets Claude, Codex and other coding agents build full-stack apps in persistent workspaces and share them by link, without a separate deployment.",
+  "version": "0.3.1",
   "websiteUrl": "https://reachpad.dev",
   "repository": {
     "url": "https://github.com/Reachpad/reachpad-mcp",
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@reachpad/mcp",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "transport": {
         "type": "stdio"
       },
