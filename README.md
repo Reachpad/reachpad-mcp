@@ -1,9 +1,11 @@
 # @reachpad/mcp
 
-**Development infrastructure for coding agents.** A reachpad environment is a
-cloud development computer an agent operates itself: a repo, a filesystem,
-installed dependencies and build state that all survive between calls — not an
-ephemeral sandbox that forgets. Processes are the exception; see below.
+reachpad lets Claude, Codex and other coding agents build full-stack apps in
+persistent workspaces and share them by link, without a separate deployment. A
+workspace is a cloud development computer an agent operates itself: a repo, a
+filesystem, installed dependencies and build state that all survive between
+calls, not an ephemeral sandbox that forgets. Processes are the exception; see
+below.
 
 This is the MCP server. It lets Claude, ChatGPT, Cursor, OpenCode or your own
 agent create an environment, run commands in it, fork it, and come back to it
