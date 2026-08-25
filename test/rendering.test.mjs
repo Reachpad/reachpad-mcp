@@ -189,3 +189,28 @@ test('every version literal names the same release', async () => {
     'the registry must point at the package this repository publishes',
   );
 });
+
+/**
+ * The MCP registry caps `description` at 100 characters and answers 422 —
+ * AFTER npm has already accepted the release, because npm is the first of the
+ * two publishes. That is the one failure this workflow cannot simply re-run:
+ * the version is spent, and the fix needs a new one.
+ *
+ * It has happened. 0.3.1 set both descriptions to the canonical 153-character
+ * line, was never tagged, and the cap went unnoticed until v0.4.0 tried to
+ * publish and left the registry listing behind on 0.3.0. A CI check costs
+ * nothing and is the only thing standing between that line and a burnt
+ * version.
+ *
+ * package.json is deliberately NOT held to this: npm has no such cap, and the
+ * longer sentence is the one the package page should carry.
+ */
+test('server.json fits what the MCP registry will accept', async () => {
+  const server = JSON.parse(
+    await readFile(new URL('../server.json', import.meta.url), 'utf8'),
+  );
+  assert.ok(
+    server.description.length <= 100,
+    `server.json description is ${server.description.length} chars; the registry rejects over 100`,
+  );
+});
