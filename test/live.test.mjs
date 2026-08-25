@@ -41,13 +41,13 @@ test('live: the control plane answers the shapes this server reads', { skip: !co
   assert.ok(identity.token, 'the operator session must return an identity token');
 
   const stamp = `mcp-live-${Date.now()}`;
-  const created = await call('create_environment', { name: stamp });
+  const created = await call('create_workspace', { name: stamp });
   assert.equal(created.isError, false, created.content[0].text);
-  const id = created.content[0].text.match(/environment (\S+) created/)?.[1];
-  assert.ok(id, `could not read the environment id out of: ${created.content[0].text}`);
+  const id = created.content[0].text.match(/workspace (\S+) created/)?.[1];
+  assert.ok(id, `could not read the workspace id out of: ${created.content[0].text}`);
 
   try {
-    const listed = await call('list_environments');
+    const listed = await call('list_workspaces');
     assert.match(listed.content[0].text, new RegExp(id));
 
     // Exec has exactly three legitimate outcomes against a real fleet, and the
@@ -60,11 +60,11 @@ test('live: the control plane answers the shapes this server reads', { skip: !co
     // Three is what a dev controld produces: the dev fixture's node is a row,
     // not a running noded, so the exec is queued and never claimed. It is also
     // what a wedged node produces in production, which is why it is asserted
-    // here rather than treated as a broken test environment.
+    // here rather than treated as a broken test workspace.
     const ran = await call('run_command', {
-      environment: id,
+      workspace: id,
       argv: ['/bin/sh', '-lc', 'echo mcp-live-ok && id -u'],
-      // Sixty seconds, not five. This environment has never run, so this
+      // Sixty seconds, not five. This workspace has never run, so this
       // command pays for a COLD BOOT before the shell starts — measured at
       // ~4.7 s unloaded, and this box is simultaneously the only fleet node.
       // At five it was the timeout under test rather than the exec.
@@ -88,23 +88,23 @@ test('live: the control plane answers the shapes this server reads', { skip: !co
     // The whole point of the port tools: something built in here becomes
     // something a person can open. Every assertion below is about a SHAPE
     // controld actually sends, which is the one thing the stub cannot prove.
-    const exposed = await call('expose_port', { environment: id, port: 8080, check: false });
+    const exposed = await call('expose_port', { workspace: id, port: 8080, check: false });
     if (!exposed.isError) {
       assert.match(exposed.content[0].text, /port 8080 in \S+ is open/, exposed.content[0].text);
       // Idempotent per live (workspace, port), server-side. Two calls, one link.
-      const again = await call('expose_port', { environment: id, port: 8080, check: false });
+      const again = await call('expose_port', { workspace: id, port: 8080, check: false });
       assert.equal(
         exposed.content[0].text.split('\n')[0],
         again.content[0].text.split('\n')[0],
         're-exposing an open port must return the SAME link, not a second one',
       );
 
-      const ports = await call('list_ports', { environment: id });
+      const ports = await call('list_ports', { workspace: id });
       assert.match(ports.content[0].text, /^8080\s/m, ports.content[0].text);
 
-      const revoked = await call('revoke_port', { environment: id, port: 8080 });
+      const revoked = await call('revoke_port', { workspace: id, port: 8080 });
       assert.equal(revoked.isError, false, revoked.content[0].text);
-      const empty = await call('list_ports', { environment: id });
+      const empty = await call('list_ports', { workspace: id });
       assert.match(empty.content[0].text, /no ports are open/, empty.content[0].text);
       console.log('live: expose → list → revoke, against the real preview plane');
     } else {
@@ -118,16 +118,16 @@ test('live: the control plane answers the shapes this server reads', { skip: !co
     // running workspace holds a lease, and `archive` answers `409 lease_held`
     // — "release or pause the workspace before archiving it". This suite used
     // to end on that refusal every time it got as far as running a command,
-    // because the surface had no verb that could clear it. `pause_environment`
+    // because the surface had no verb that could clear it. `pause_workspace`
     // is that verb, and this is the arc that could not complete without it.
-    const paused = await call('pause_environment', { environment: id });
+    const paused = await call('pause_workspace', { workspace: id });
     assert.equal(paused.isError, false, paused.content[0].text);
     console.log(`live: ${paused.content[0].text.split(';')[0]}`);
 
     // Sealing is not instant, and archive refuses until the lease is gone.
     let deleted;
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      deleted = await call('delete_environment', { environment: id });
+      deleted = await call('delete_workspace', { workspace: id });
       if (!deleted.isError) break;
       if (!/lease_held/.test(deleted.content[0].text)) break;
       await new Promise((resolve) => setTimeout(resolve, 2_000));

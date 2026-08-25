@@ -8,17 +8,17 @@ calls, not an ephemeral sandbox that forgets. Processes are the exception; see
 below.
 
 This is the MCP server. It lets Claude, ChatGPT, Cursor, OpenCode or your own
-agent create an environment, run commands in it, fork it, and come back to it
+agent create a workspace, run commands in it, fork it, and come back to it
 later, without a developer keeping a laptop open for them.
 
 - **It persists.** Pause it and the disk is sealed; the next call boots from
   that seal with the files, installs and git state intact, rather than
   rebuilding. Processes are the exception: a start is always a cold boot.
 - **It forks.** Twenty attempts from one prepared state cost a delta each, not
-  twenty rebuilds — because the environment is a snapshot chain, not a machine.
-- **It can keep secrets out of the box.** A brokered credential is called at
-  the boundary on your behalf and its value never enters the environment, the
-  log or the store. A credential written into the environment instead is
+  twenty rebuilds — because the workspace is a snapshot chain, not a machine.
+- **It can keep secrets out of the workspace.** A brokered credential is called at
+  the boundary on your behalf and its value never enters the workspace, the
+  log or the store. A credential written into the workspace instead is
   readable there, by design.
 - **It is agent-agnostic.** The REST API is canonical; this server, the SDK and
   the CLI are translations of it. Bring your own agent.
@@ -61,7 +61,7 @@ authorizes reachpad.
 |---|---|
 | `REACHPAD_ENDPOINT` | your reachpad host. Plaintext `http://` to anything but loopback is refused before a socket opens. |
 | `REACHPAD_IDENTITY_CREDENTIAL` | your per-user credential. It names one account and can act for no other — the server takes the identity from the credential's own record, never from the request. |
-| `REACHPAD_API_KEY` | optional, per-environment scoped and revocable. When set, `run_command` uses it and needs no identity exchange. |
+| `REACHPAD_API_KEY` | optional, per-workspace scoped and revocable. When set, `run_command` uses it and needs no identity exchange. |
 | `REACHPAD_MCP_HTTP_PORT` | serve HTTP instead of stdio. |
 | `REACHPAD_MCP_HTTP_HOST` | default `127.0.0.1`. This process bridges to a control plane with your credentials, so binding it to the world is a decision made on purpose, behind a proxy that terminates TLS. |
 | `REACHPAD_MCP_HTTP_TOKEN` | bearer token, compared in constant time. Absent, **every caller that can reach the port is authorized**, and the server says so on stderr. |
@@ -75,18 +75,25 @@ escalation nobody chose to perform.
 
 | tool | what it does |
 |---|---|
-| `get_credit_balance()` | remaining compute credits. One credit runs one standard environment for one minute. |
-| `create_environment(repo?, ref?, name?)` | a new environment, optionally with a repository cloned into `$HOME/work`. Reachpad generates its display name when omitted. |
-| `list_environments()` | your environments and how many forks each has |
-| `get_environment(environment)` | what it boots from: its head snapshot, its log position and its fork tree |
-| `run_command(environment, argv, cwd?, env?, timeout_ms?)` | one command, its exit code and its output. A paused environment resumes to serve it. |
-| `checkpoint_environment(environment, name?)` | fork from the last sealed snapshot; the original is untouched |
-| `expose_port(environment, port, check?)` | open a port to the web and get the link that reaches it. Idempotent per port. |
-| `list_ports(environment)` | the ports this environment has open, oldest first, with their links |
-| `revoke_port(environment, port)` | close one port. Re-opening it later mints a **different** link. |
-| `delete_environment(environment)` | archive it and free the plan slot. Nothing is deleted — snapshots and history survive. |
+| `get_credit_balance()` | remaining compute credits. One credit runs one standard workspace for one minute. |
+| `create_workspace(repo?, ref?, name?)` | a new workspace, optionally with a repository cloned into `$HOME/work`. Reachpad generates its display name when omitted. |
+| `list_workspaces()` | your workspaces and how many forks each has |
+| `get_workspace(workspace)` | what it boots from: its head snapshot, its log position and its fork tree |
+| `run_command(workspace, argv, cwd?, env?, timeout_ms?)` | one command, its exit code and its output. A paused workspace resumes to serve it. |
+| `checkpoint_workspace(workspace, name?)` | fork from the last sealed snapshot; the original is untouched |
+| `expose_port(workspace, port, check?)` | open a port to the web and get the link that reaches it. Idempotent per port. |
+| `list_ports(workspace)` | the ports this workspace has open, oldest first, with their links |
+| `revoke_port(workspace, port)` | close one port. Re-opening it later mints a **different** link. |
+| `delete_workspace(workspace)` | archive it and free the plan slot. Nothing is deleted — snapshots and history survive. |
 
-**Not here, deliberately:** starting an agent inside the environment. It is in
+**Renamed in 0.4.0.** Six tools used to be spelled `*_environment` and took an
+`environment` argument, while the CLI, the manual and the dashboard all said
+workspace. There was only ever one object; now there is only one word for it.
+The old names and the old argument still work and are not advertised, so
+nothing that already calls them breaks — but write new calls against the
+workspace spelling.
+
+**Not here, deliberately:** starting an agent inside the workspace. It is in
 reachpad's roadmap and not in the fleet yet — a tool that always fails costs a
 model a turn and teaches it to distrust the rest, so this server advertises
 nothing it cannot serve.
@@ -100,14 +107,14 @@ discoverable from the URL:
   private URL and not a secure one. Treat it like a preview deployment.
 - **The link is an address, not a copy.** Restart the app on the same port and
   the same link serves the new version.
-- **A running process does not survive a pause.** The environment cold-boots
+- **A running process does not survive a pause.** The workspace cold-boots
   with its files intact and nothing running, so after a pause the link answers
   with an error until something is listening on that port again. A visitor's
-  request wakes a paused environment; it does not restart anything inside it.
+  request wakes a paused workspace; it does not restart anything inside it.
 - **`expose_port` dials the port afterwards** and tells you if nothing
   answered, because a link to a port nothing is serving looks exactly like a
   link that works. Pass `check: false` to skip it — the dial resumes a paused
-  environment.
+  workspace.
 - **With only `REACHPAD_API_KEY`, the key must be `--role owner`.** A
   `collaborator` key is refused: listing hands back live tokens, and a token is
   a capability.

@@ -237,7 +237,7 @@ export class ControlClient {
   /**
    * The owner Biscuit for a workspace this process did not create.
    * `POST /v1/workspaces/:id/token` mints one from the identity token, which
-   * is how a fresh process acts on an environment created last week.
+   * is how a fresh process acts on an workspace created last week.
    */
   async biscuitFor(workspace) {
     const cached = this.biscuits.get(workspace);
@@ -270,7 +270,7 @@ export class ControlClient {
   /**
    * `GET /v1/workspaces/:id` — state, and the lease if one is held.
    *
-   * The only route that reports whether an environment is RUNNING. `lineage`
+   * The only route that reports whether an workspace is RUNNING. `lineage`
    * answers what it boots from, and `list` answers what exists; neither
    * answers the question a caller about to pause, archive or share a port
    * actually has.

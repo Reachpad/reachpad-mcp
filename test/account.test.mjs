@@ -3,7 +3,7 @@
  *
  * The failure this prevents is not an error — it is silence. Authorize with a
  * different email than the one your reachpad account uses and everything
- * works: you get a valid token, a real account, and an empty environment list.
+ * works: you get a valid token, a real account, and an empty workspace list.
  * That reads as "my work is gone" rather than "wrong login", and nothing
  * anywhere contradicts it.
  */
@@ -55,16 +55,16 @@ test('the handshake names the account, and says what a mismatch looks like', asy
 
 test('an empty list says WHOSE list is empty', async () => {
   await withServer({ REACHPAD_ACCOUNT_LABEL: 'seiji@example.com' }, async ({ call }) => {
-    const text = await call('list_environments');
+    const text = await call('list_workspaces');
     assert.match(text, /account: seiji@example\.com/);
-    assert.match(text, /No environments yet/);
+    assert.match(text, /No workspaces yet/);
   });
 });
 
 test('a populated list carries it too', async () => {
   await withServer({ REACHPAD_ACCOUNT_LABEL: 'seiji@example.com' }, async ({ call }) => {
-    await call('create_environment', { name: 'demo' });
-    const text = await call('list_environments');
+    await call('create_workspace', { name: 'demo' });
+    const text = await call('list_workspaces');
     assert.match(text, /^account: seiji@example\.com/);
     assert.match(text, /ws-1\s+demo/);
   });
@@ -81,6 +81,6 @@ test('without a label nothing is invented', async () => {
     // A host that does not know the account must not get a sentence claiming
     // one — the stdio path has no idea who the person is.
     assert.equal(res.result.instructions, undefined);
-    assert.doesNotMatch(await call('list_environments'), /account:/);
+    assert.doesNotMatch(await call('list_workspaces'), /account:/);
   });
 });
