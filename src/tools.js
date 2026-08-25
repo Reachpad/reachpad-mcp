@@ -34,7 +34,7 @@ function renderExec(result) {
       ? `killed by ${result.signal ?? 'a signal'} after ${result.duration_ms ?? '?'} ms`
       : `exit ${result.exit_code} after ${result.duration_ms ?? '?'} ms`,
   );
-  if (result.resumed) lines.push('(the environment was paused and resumed to run this)');
+  if (result.resumed) lines.push('(the workspace was paused and resumed to run this)');
   if (result.timed_out) lines.push('TIMED OUT — the command did not finish');
   if (result.truncated) lines.push('output hit the entitlement cap and was truncated server-side');
   if (out.text) lines.push(`--- stdout${out.dropped ? ` (first ${out.dropped} bytes dropped)` : ''} ---\n${out.text}`);
@@ -53,20 +53,20 @@ export function buildTools(client) {
       title: 'Get compute-credit balance',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        'Show this account\'s remaining compute credits. One credit runs one standard environment for one minute; paused environments use no compute credits.',
+        'Show this account\'s remaining compute credits. One credit runs one standard workspace for one minute; paused workspaces use no compute credits.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async handler() {
         const balance = await client.creditBalance();
         const millicredits = Number(balance.balance_millicredits ?? 0);
-        return `${(millicredits / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })} compute credits remaining\n1 credit = 1 active standard-environment minute`;
+        return `${(millicredits / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })} compute credits remaining\n1 credit = 1 active standard-workspace minute`;
       },
     },
     {
-      name: 'create_environment',
-      title: 'Create environment',
+      name: 'create_workspace',
+      title: 'Create workspace',
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       description:
-        'Create a persistent development environment: a filesystem and processes that survive between calls. Optionally clone a git repository into it. Returns the environment id used by every other tool.',
+        'Create a persistent development workspace: a filesystem and processes that survive between calls. Optionally clone a git repository into it. Returns the workspace id used by every other tool.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -76,7 +76,7 @@ export function buildTools(client) {
           },
           repo: {
             type: 'string',
-            description: 'Optional git URL to clone into `$HOME/work` inside the environment. Must be reachable without credentials unless the account has a mirror for it.',
+            description: 'Optional git URL to clone into `$HOME/work` inside the workspace. Must be reachable without credentials unless the account has a mirror for it.',
           },
           ref: { type: 'string', description: 'Optional branch or tag to check out.' },
         },
@@ -84,7 +84,7 @@ export function buildTools(client) {
       },
       async handler({ name, repo, ref }) {
         const created = await client.createWorkspace(name);
-        const lines = [`environment ${created.id} created (name: ${created.name})`];
+        const lines = [`workspace ${created.id} created (name: ${created.name})`];
         if (repo) {
           const argv = ['/bin/sh', '-lc', cloneScript(repo, ref)];
           const result = await client.exec(created.id, { argv, timeoutMs: 300_000 });
@@ -95,7 +95,7 @@ export function buildTools(client) {
           lines.push(
             result.exit_code === 0
               ? `cloned ${repo}${ref ? ` at ${ref}` : ''} into ${where} — pass that as \`cwd\` to run_command`
-              : `clone FAILED — the environment exists and is usable, but the source is not there:\n${renderExec(result)}`,
+              : `clone FAILED — the workspace exists and is usable, but the source is not there:\n${renderExec(result)}`,
           );
         }
         return lines.join('\n');
@@ -103,18 +103,18 @@ export function buildTools(client) {
     },
 
     {
-      name: 'list_environments',
-      title: 'List environments',
+      name: 'list_workspaces',
+      title: 'List workspaces',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-      description: 'List this account\'s environments, with how many forks each has.',
+      description: 'List this account\'s workspaces, with how many forks each has.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async handler() {
         const rows = await client.listWorkspaces();
         // The account leads, and it leads on the EMPTY answer especially: "no
-        // environments" and "no environments for THIS account" are different
+        // workspaces" and "no workspaces for THIS account" are different
         // sentences, and only the second one lets someone spot a wrong login.
         const who = client.accountLabel ? `account: ${client.accountLabel}\n` : '';
-        if (!rows.length) return `${who}No environments yet.`;
+        if (!rows.length) return `${who}No workspaces yet.`;
         return who + rows
           .map((row) => {
             const bits = [row.id, row.name || '(unnamed)'];
@@ -127,33 +127,33 @@ export function buildTools(client) {
     },
 
     {
-      name: 'get_environment',
-      title: 'Inspect environment',
+      name: 'get_workspace',
+      title: 'Inspect workspace',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        'What an environment resumes from: its head snapshot, how far its log had got, and its fork tree. Every start is a cold boot from the head snapshot: files survive, running processes do not.',
+        'What a workspace resumes from: its head snapshot, how far its log had got, and its fork tree. Every start is a cold boot from the head snapshot: files survive, running processes do not.',
       inputSchema: {
         type: 'object',
-        properties: { environment: { type: 'string' } },
-        required: ['environment'],
+        properties: { workspace: { type: 'string' } },
+        required: ['workspace'],
         additionalProperties: false,
       },
-      async handler({ environment }) {
-        const body = await client.lineage(environment);
+      async handler({ workspace }) {
+        const body = await client.lineage(workspace);
         // `head_snapshot`, which is what GET /v1/workspaces/:id/lineage
         // actually answers with. Reading `head` meant this branch never fired:
-        // EVERY environment reported "never sealed", including ones with forks
+        // EVERY workspace reported "never sealed", including ones with forks
         // hanging off a snapshot, which the fork route refuses to make without
         // one. The stub returned the wrong key too, so the tests agreed with
         // the bug — hence `sealedHeadIsRead` below, which pins the key name.
         const head = body.head_snapshot ?? null;
-        const lines = [`environment ${environment}`];
+        const lines = [`workspace ${workspace}`];
         // State first, because it is the one line that changes what the
         // caller does next — and this is the only tool that reports it.
         // Never fatal: a fleet that does not serve the status route can still
         // answer the lineage question this tool exists for.
         try {
-          const status = await client.workspaceStatus(environment);
+          const status = await client.workspaceStatus(workspace);
           lines.push(
             status.state === 'running'
               ? 'state: running — it holds a plan slot and spends a credit a minute'
@@ -186,48 +186,48 @@ export function buildTools(client) {
       title: 'Run a command',
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       description:
-        'Run one command in an environment and get its exit code and output. Not a shell: pass argv as a list, and ask for a shell explicitly with ["/bin/sh","-lc","…"] if you want one. A paused environment resumes to serve this.',
+        'Run one command in a workspace and get its exit code and output. Not a shell: pass argv as a list, and ask for a shell explicitly with ["/bin/sh","-lc","…"] if you want one. A paused workspace resumes to serve this.',
       inputSchema: {
         type: 'object',
         properties: {
-          environment: { type: 'string' },
+          workspace: { type: 'string' },
           argv: { type: 'array', items: { type: 'string' }, minItems: 1 },
           cwd: { type: 'string' },
           env: { type: 'object', additionalProperties: { type: 'string' } },
           timeout_ms: {
             type: 'integer',
             description:
-              'Give up after this long. PASS IT. Clamped by the entitlement server-side, and without it the environment is allowed ten minutes — so a wedged environment costs you ten before you learn anything. Seconds to a couple of minutes suits most commands; raise it for builds.',
+              'Give up after this long. PASS IT. Clamped by the entitlement server-side, and without it the workspace is allowed ten minutes — so a wedged workspace costs you ten before you learn anything. Seconds to a couple of minutes suits most commands; raise it for builds.',
           },
         },
-        required: ['environment', 'argv'],
+        required: ['workspace', 'argv'],
         additionalProperties: false,
       },
-      async handler({ environment, argv, cwd, env, timeout_ms }) {
-        const result = await client.exec(environment, { argv, cwd, env, timeoutMs: timeout_ms });
+      async handler({ workspace, argv, cwd, env, timeout_ms }) {
+        const result = await client.exec(workspace, { argv, cwd, env, timeoutMs: timeout_ms });
         return renderExec(result);
       },
     },
 
     {
-      name: 'checkpoint_environment',
-      title: 'Fork environment',
+      name: 'checkpoint_workspace',
+      title: 'Fork workspace',
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       description:
-        'Fork an environment from its last sealed snapshot into a new one. The original is untouched. This is how you try several approaches from one prepared state — the fork costs a delta, not a rebuild.',
+        'Fork a workspace from its last sealed snapshot into a new one. The original is untouched. This is how you try several approaches from one prepared state — the fork costs a delta, not a rebuild.',
       inputSchema: {
         type: 'object',
         properties: {
-          environment: { type: 'string' },
+          workspace: { type: 'string' },
           name: { type: 'string', description: 'Name for the fork.' },
         },
-        required: ['environment'],
+        required: ['workspace'],
         additionalProperties: false,
       },
-      async handler({ environment, name }) {
-        const body = await client.fork(environment, name);
+      async handler({ workspace, name }) {
+        const body = await client.fork(workspace, name);
         const id = body.workspace?.id ?? body.id ?? '(unknown)';
-        return `forked ${environment} → ${id}${name ? ` (${name})` : ''}`;
+        return `forked ${workspace} → ${id}${name ? ` (${name})` : ''}`;
       },
     },
 
@@ -236,35 +236,35 @@ export function buildTools(client) {
       title: 'Expose a port to the web',
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        'Open a port inside an environment and get back a link that reaches it. This is how something you built becomes something a person can open. Idempotent per port: re-running it returns the link the port already has.',
+        'Open a port inside a workspace and get back a link that reaches it. This is how something you built becomes something a person can open. Idempotent per port: re-running it returns the link the port already has.',
       inputSchema: {
         type: 'object',
         properties: {
-          environment: { type: 'string' },
+          workspace: { type: 'string' },
           port: {
             type: 'integer',
             minimum: 1,
             maximum: 65535,
-            description: 'The port your app is listening on INSIDE the environment.',
+            description: 'The port your app is listening on INSIDE the workspace.',
           },
           check: {
             type: 'boolean',
             description:
-              'Dial the port inside the environment afterwards and say whether anything answered. Default true. It costs one short command, and it RESUMES the environment if it was paused — pass false if you are opening a port ahead of starting the server.',
+              'Dial the port inside the workspace afterwards and say whether anything answered. Default true. It costs one short command, and it RESUMES the workspace if it was paused — pass false if you are opening a port ahead of starting the server.',
           },
         },
-        required: ['environment', 'port'],
+        required: ['workspace', 'port'],
         additionalProperties: false,
       },
-      async handler({ environment, port, check = true }) {
-        const share = await client.createPortShare(environment, port);
+      async handler({ workspace, port, check = true }) {
+        const share = await client.createPortShare(workspace, port);
         const lines = [
           share.url
-            ? `port ${share.port} in ${environment} is open at ${share.url}`
-            : `port ${share.port} in ${environment} is open (token ${share.token}) — this deployment reports no preview origin, so there is no link to hand out`,
+            ? `port ${share.port} in ${workspace} is open at ${share.url}`
+            : `port ${share.port} in ${workspace} is open (token ${share.token}) — this deployment reports no preview origin, so there is no link to hand out`,
         ];
         if (check) {
-          const state = await probePort(client, environment, share.port);
+          const state = await probePort(client, workspace, share.port);
           if (state === 'silent') {
             lines.push(
               `NOTHING IS LISTENING on ${share.port} right now. The link resolves, and a visitor gets an error page rather than your app. Start the server, then this same link serves it — no new link is needed.`,
@@ -274,10 +274,10 @@ export function buildTools(client) {
           }
         }
         lines.push(
-          'Who can open it: anyone who has the link AND is signed in to Reachpad. It is not a private URL and not a secure one — treat it like a preview deployment. It carries no port, no environment id and no account name.',
+          'Who can open it: anyone who has the link AND is signed in to Reachpad. It is not a private URL and not a secure one — treat it like a preview deployment. It carries no port, no workspace id and no account name.',
         );
         lines.push(
-          'What breaks it: a running process does NOT survive a pause. After a pause the environment cold-boots, files intact and nothing running, and the link answers with an error until you start the app again on the same port. A visitor’s request wakes a paused environment but does not restart anything in it.',
+          'What breaks it: a running process does NOT survive a pause. After a pause the workspace cold-boots, files intact and nothing running, and the link answers with an error until you start the app again on the same port. A visitor’s request wakes a paused workspace but does not restart anything in it.',
         );
         return lines.join('\n');
       },
@@ -288,16 +288,16 @@ export function buildTools(client) {
       title: 'List exposed ports',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        'The ports this environment has open to the web, oldest first, with their links. Revoked ports are not listed: a closed link never comes back.',
+        'The ports this workspace has open to the web, oldest first, with their links. Revoked ports are not listed: a closed link never comes back.',
       inputSchema: {
         type: 'object',
-        properties: { environment: { type: 'string' } },
-        required: ['environment'],
+        properties: { workspace: { type: 'string' } },
+        required: ['workspace'],
         additionalProperties: false,
       },
-      async handler({ environment }) {
-        const shares = await client.listPortShares(environment);
-        if (!shares.length) return `no ports are open in ${environment}`;
+      async handler({ workspace }) {
+        const shares = await client.listPortShares(workspace);
+        if (!shares.length) return `no ports are open in ${workspace}`;
         return shares
           .map((s) => `${s.port}  ${s.url ?? `(token ${s.token})`}`)
           .join('\n');
@@ -313,73 +313,73 @@ export function buildTools(client) {
       inputSchema: {
         type: 'object',
         properties: {
-          environment: { type: 'string' },
+          workspace: { type: 'string' },
           port: { type: 'integer', minimum: 1, maximum: 65535 },
         },
-        required: ['environment', 'port'],
+        required: ['workspace', 'port'],
         additionalProperties: false,
       },
-      async handler({ environment, port }) {
-        await client.revokePortShare(environment, port);
-        return `port ${port} is closed in ${environment}; the link that reached it stops working at the next request, and re-opening this port mints a new one`;
+      async handler({ workspace, port }) {
+        await client.revokePortShare(workspace, port);
+        return `port ${port} is closed in ${workspace}; the link that reached it stops working at the next request, and re-opening this port mints a new one`;
       },
     },
 
     {
-      name: 'pause_environment',
-      title: 'Pause environment',
+      name: 'pause_workspace',
+      title: 'Pause workspace',
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        "Save the environment's disk and stop the meter. Files survive; RUNNING PROCESSES DO NOT \u2014 a paused environment cold-boots, so anything you started with run_command has to be started again. The next run_command resumes it automatically. Pause when you are done: a running environment spends a credit a minute whether or not anything is happening in it, and it cannot be archived while it runs.",
+        "Save the workspace's disk and stop the meter. Files survive; RUNNING PROCESSES DO NOT \u2014 a paused workspace cold-boots, so anything you started with run_command has to be started again. The next run_command resumes it automatically. Pause when you are done: a running workspace spends a credit a minute whether or not anything is happening in it, and it cannot be archived while it runs.",
       inputSchema: {
         type: 'object',
-        properties: { environment: { type: 'string' } },
-        required: ['environment'],
+        properties: { workspace: { type: 'string' } },
+        required: ['workspace'],
         additionalProperties: false,
       },
-      async handler({ environment }) {
-        const status = await client.workspaceStatus(environment);
-        if (status.state === 'paused') return `environment ${environment} is already paused`;
-        if (status.state === 'sealing') return `environment ${environment} is already saving`;
+      async handler({ workspace }) {
+        const status = await client.workspaceStatus(workspace);
+        if (status.state === 'paused') return `workspace ${workspace} is already paused`;
+        if (status.state === 'sealing') return `workspace ${workspace} is already saving`;
         if (status.state === 'archived') {
-          return `environment ${environment} is archived \u2014 there is nothing running to pause`;
+          return `workspace ${workspace} is archived \u2014 there is nothing running to pause`;
         }
         if (status.state === 'never_started') {
-          return `environment ${environment} has never run, so there is nothing to save`;
+          return `workspace ${workspace} has never run, so there is nothing to save`;
         }
         const fencingToken = status.lease?.fencingToken;
         if (!fencingToken) {
           // The token is reported only to a caller the server also authorizes
           // to WRITE, so its absence is an authority answer, not a race.
-          return `environment ${environment} reports no lease this credential may release \u2014 it needs write access`;
+          return `workspace ${workspace} reports no lease this credential may release \u2014 it needs write access`;
         }
-        await client.release(environment, fencingToken);
-        return `environment ${environment} is saving its disk and stopping; the next run_command resumes it, with nothing running inside it`;
+        await client.release(workspace, fencingToken);
+        return `workspace ${workspace} is saving its disk and stopping; the next run_command resumes it, with nothing running inside it`;
       },
     },
 
     {
-      name: 'delete_environment',
-      title: 'Archive environment',
+      name: 'delete_workspace',
+      title: 'Archive workspace',
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
       description:
-        'Archive an environment, freeing the plan slot it holds. Nothing is deleted: its snapshots and history survive, it simply stops counting as live and can no longer be used. A RUNNING environment cannot be archived \u2014 pause_environment first, or this is refused with `lease_held`.',
+        'Archive a workspace, freeing the plan slot it holds. Nothing is deleted: its snapshots and history survive, it simply stops counting as live and can no longer be used. A RUNNING workspace cannot be archived \u2014 pause_workspace first, or this is refused with `lease_held`.',
       inputSchema: {
         type: 'object',
-        properties: { environment: { type: 'string' } },
-        required: ['environment'],
+        properties: { workspace: { type: 'string' } },
+        required: ['workspace'],
         additionalProperties: false,
       },
-      async handler({ environment }) {
-        await client.archive(environment);
-        return `environment ${environment} archived; its history is intact and its plan slot is free`;
+      async handler({ workspace }) {
+        await client.archive(workspace);
+        return `workspace ${workspace} archived; its history is intact and its plan slot is free`;
       },
     },
   ];
 }
 
 /**
- * Is anything actually listening on `port` inside the environment?
+ * Is anything actually listening on `port` inside the workspace?
  *
  * The dial is the one hub itself makes — a TCP connect to `127.0.0.1:<port>`
  * in the guest (`ChannelKind::Tcp`) — so a pass here means a visitor's
@@ -393,14 +393,14 @@ export function buildTools(client) {
  *
  * @returns {Promise<'listening'|'silent'|'unknown'>}
  */
-async function probePort(client, environment, port) {
+async function probePort(client, workspace, port) {
   const script =
     `if command -v python3 >/dev/null 2>&1; then ` +
     `python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); ` +
     `sys.exit(0 if s.connect_ex(("127.0.0.1",${port}))==0 else 1)'; ` +
     `else ss -ltn 2>/dev/null | grep -q ":${port} "; fi`;
   try {
-    const result = await client.exec(environment, {
+    const result = await client.exec(workspace, {
       argv: ['/bin/sh', '-lc', script],
       timeoutMs: 15_000,
     });
@@ -417,7 +417,7 @@ async function probePort(client, environment, port) {
  *
  * This used to say `/work`, and it could not have worked once: the guest
  * rootfs is mounted `ro` (`/dev/root / ext4 ro`), so `mkdir -p /work` failed
- * with "Read-only file system" on every environment this server has ever
+ * with "Read-only file system" on every workspace this server has ever
  * created — the first move an agent makes, broken 100% of the time. The one
  * writable surface that survives a pause is the workspace disk, mounted at
  * `/mnt` and at `$HOME`; `$HOME` is where a person's files already are.

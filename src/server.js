@@ -21,6 +21,39 @@ import { ApiError } from './errors.js';
 const PROTOCOL_VERSION = '2025-06-18';
 
 /*
+ * Until 0.4.0 this server called a workspace an "environment" — in six tool
+ * names and in the argument every one of them takes — while the CLI, the
+ * manual and the dashboard had always called it a workspace. The manual had
+ * to carry a line saying the two words named the same object, which is a
+ * documentation fix for a naming bug. The tools are renamed; these are the
+ * old names, still dispatched and deliberately NOT advertised in
+ * `tools/list`, because a client that cached the old list or an agent
+ * quoting an older README would otherwise call a tool that vanished.
+ */
+const LEGACY_TOOL_NAMES = {
+  create_environment: 'create_workspace',
+  list_environments: 'list_workspaces',
+  get_environment: 'get_workspace',
+  checkpoint_environment: 'checkpoint_workspace',
+  pause_environment: 'pause_workspace',
+  delete_environment: 'delete_workspace',
+};
+
+/**
+ * Accept `environment` where a tool now takes `workspace`.
+ *
+ * An explicit `workspace` always wins: a caller that sends both means the one
+ * it named under the current spelling, and silently preferring the legacy key
+ * would send the command to a different workspace than the one it asked for.
+ */
+function withLegacyArguments(args) {
+  if (!args || typeof args !== 'object') return args;
+  if (args.environment === undefined || args.workspace !== undefined) return args;
+  const { environment, ...rest } = args;
+  return { ...rest, workspace: environment };
+}
+
+/*
  * The version is read from package.json rather than written here twice. It had
  * drifted to three different answers: this literal said 0.1.0, package.json
  * said 0.2.0 and the latest on npm was 0.1.5, so every client was told 0.1.0
@@ -69,8 +102,8 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
             ...(account
               ? {
                   instructions:
-                    `This reachpad connection acts as ${account}. Environments belong to that ` +
-                    `account and no other. If someone expects to see environments that are not ` +
+                    `This reachpad connection acts as ${account}. Workspaces belong to that ` +
+                    `account and no other. If someone expects to see workspaces that are not ` +
                     `listed, say which account is connected before anything else — the usual ` +
                     `cause is authorizing with a different email than the one they use for reachpad.`,
                 }
@@ -100,14 +133,15 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
           });
 
         case 'tools/call': {
-          const tool = byName.get(params?.name);
+          const requested = params?.name;
+          const tool = byName.get(requested) ?? byName.get(LEGACY_TOOL_NAMES[requested]);
           if (!tool) {
             // An unknown tool is a protocol error, not a tool failure: the
             // caller asked for something this server never advertised.
-            return error(id, -32602, `unknown tool: ${params?.name}`);
+            return error(id, -32602, `unknown tool: ${requested}`);
           }
           try {
-            const text = await tool.handler(params.arguments ?? {});
+            const text = await tool.handler(withLegacyArguments(params.arguments ?? {}));
             return reply(id, { content: [{ type: 'text', text }], isError: false });
           } catch (err) {
             // A tool that refused is a RESULT, not a transport error — the

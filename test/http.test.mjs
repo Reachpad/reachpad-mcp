@@ -69,10 +69,10 @@ test('a connector can handshake and call a tool over HTTP', async () => {
         jsonrpc: '2.0',
         id: 3,
         method: 'tools/call',
-        params: { name: 'create_environment', arguments: { name: 'over-http' } },
+        params: { name: 'create_workspace', arguments: { name: 'over-http' } },
       })
     ).json();
-    assert.match(called.result.content[0].text, /environment ws-1 created/);
+    assert.match(called.result.content[0].text, /workspace ws-1 created/);
   });
 });
 

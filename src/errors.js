@@ -4,7 +4,7 @@
  * Every controld refusal is `{"error":"<code>"}` plus, for the ones that
  * matter, fields naming the limit and what to do about it. An agent handed
  * `entitlement_limit` learns nothing; an agent handed "you have 3 of 3 live
- * environments; archive one" acts. The numbers come from the server — this
+ * workspaces; archive one" acts. The numbers come from the server — this
  * module never invents one, because I13 says the entitlement is policy and a
  * hardcoded limit here would be a lie the moment policy changed.
  */
@@ -13,18 +13,18 @@
 const SENTENCE = {
   entitlement_limit: 'You are at your plan limit.',
   no_entitlement: 'This account has no entitlement for that.',
-  exec_concurrency_exceeded: 'Too many commands are already running in this environment.',
-  no_capacity: 'The fleet has no room for this environment right now.',
-  workspace_stopping: 'The environment is sealing on its way down.',
-  workspace_archived: 'That environment is archived; nothing is deleted, but it cannot be used.',
-  workspace_not_found: 'No such environment (or it belongs to another account).',
-  lease_held: 'Another node holds this environment.',
-  node_draining: 'The node running this environment is being drained.',
-  workspace_unavailable: 'The environment is between homes; retrying takes the paused path.',
+  exec_concurrency_exceeded: 'Too many commands are already running in this workspace.',
+  no_capacity: 'The fleet has no room for this workspace right now.',
+  workspace_stopping: 'The workspace is sealing on its way down.',
+  workspace_archived: 'That workspace is archived; nothing is deleted, but it cannot be used.',
+  workspace_not_found: 'No such workspace (or it belongs to another account).',
+  lease_held: 'Another node holds this workspace.',
+  node_draining: 'The node running this workspace is being drained.',
+  workspace_unavailable: 'The workspace is between homes; retrying takes the paused path.',
   empty_argv: 'A command needs at least one argument.',
   api_key_expired: 'That API key has expired.',
   api_key_revoked: 'That API key was revoked.',
-  api_key_out_of_scope: 'That API key does not name this environment.',
+  api_key_out_of_scope: 'That API key does not name this workspace.',
   api_key_unknown: 'No such API key.',
   no_authority: 'No credential was presented.',
   not_authorized: 'That credential does not permit this here.',

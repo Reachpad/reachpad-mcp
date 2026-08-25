@@ -72,7 +72,7 @@ export async function startStubControld(options = {}) {
           error: 'entitlement_limit',
           max_workspaces: 3,
           live_workspaces: 3,
-          remedy: 'archive an environment or upgrade the plan',
+          remedy: 'archive a workspace or upgrade the plan',
         });
       }
       const id = `ws-${state.nextId++}`;

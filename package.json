@@ -1,6 +1,6 @@
 {
   "name": "@reachpad/mcp",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "mcpName": "io.github.Reachpad/reachpad-mcp",
   "description": "reachpad lets Claude, Codex and other coding agents build full-stack apps in persistent workspaces and share them by link, without a separate deployment.",
   "type": "module",
