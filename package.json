@@ -37,7 +37,8 @@
   },
   "scripts": {
     "test": "node --test 'test/*.test.mjs'",
-    "ci": "node --test 'test/*.test.mjs'"
+    "ci": "node --test 'test/*.test.mjs'",
+    "prepublishOnly": "node scripts/publish-guard.mjs"
   },
   "engines": {
     "node": ">=20"
