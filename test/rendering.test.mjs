@@ -214,3 +214,21 @@ test('server.json fits what the MCP registry will accept', async () => {
     `server.json description is ${server.description.length} chars; the registry rejects over 100`,
   );
 });
+
+/**
+ * The registry's install prompt asks for the credential and nothing else.
+ *
+ * `REACHPAD_ENDPOINT` was marked required while `src/server.js` defaults it to
+ * `m1.reachpad.dev` and the README's `claude mcp add` line leaves it out, so a
+ * one-click install stopped to demand a value the package supplies itself.
+ */
+test('server.json requires only the credential', async () => {
+  const server = JSON.parse(
+    await readFile(new URL('../server.json', import.meta.url), 'utf8'),
+  );
+  const required = server.packages[0].environmentVariables
+    .filter((variable) => variable.isRequired)
+    .map((variable) => variable.name);
+
+  assert.deepEqual(required, ['REACHPAD_IDENTITY_CREDENTIAL']);
+});

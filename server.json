@@ -20,8 +20,8 @@
       "environmentVariables": [
         {
           "name": "REACHPAD_ENDPOINT",
-          "description": "Your reachpad host, e.g. m1.reachpad.dev",
-          "isRequired": true
+          "description": "Your reachpad host. Defaults to m1.reachpad.dev.",
+          "isRequired": false
         },
         {
           "name": "REACHPAD_IDENTITY_CREDENTIAL",
