@@ -17,6 +17,14 @@
  *   authorizes reachpad. Until the OAuth work in ADR-0066 §3 lands that is a
  *   bearer token compared in constant time; afterwards it is the OAuth token,
  *   and this is the layer that changes.
+ *
+ * What it does NOT decline to do any more is serve without a token. The guard
+ * here used to read `if (token && !presentsToken(...))`, so an absent token
+ * short-circuited it and every caller that could reach the port was
+ * authorized — on a process that bridges to a control plane with the user's
+ * credentials, where `run_command` is one POST away. No token is now a
+ * refusal at construction, and serving open is an affirmative argument
+ * somebody passes on purpose.
  */
 
 import { createServer as createHttpServer } from 'node:http';
@@ -26,10 +34,19 @@ const MAX_BODY_BYTES = 1024 * 1024; // controld's own control-plane body cap.
 
 /**
  * @param {{handle: (message: object) => Promise<object|null>}} server
- * @param {{token?: string, allowedOrigins?: string[]}} options
+ * @param {{token?: string, allowedOrigins?: string[], allowAnonymous?: boolean}} options
  */
 export function createHttpHandler(server, options = {}) {
-  const { token, allowedOrigins = [] } = options;
+  const { token, allowedOrigins = [], allowAnonymous = false } = options;
+
+  // At construction, not per request: an endpoint that will authorize
+  // everybody should never reach `listen()` by accident, and a startup failure
+  // is the one error a caller cannot miss.
+  if (!token && !allowAnonymous) {
+    throw new Error(
+      'refusing to serve an unauthenticated MCP endpoint: pass a token, or pass allowAnonymous: true to mean it',
+    );
+  }
 
   return async function handler(req, res) {
     const send = (status, payload, headers = {}) => {
@@ -60,6 +77,8 @@ export function createHttpHandler(server, options = {}) {
     }
 
     if (token && !presentsToken(req, token)) {
+      // `token` is always set unless the caller asked for an open endpoint by
+      // name; see the construction check above.
       // A challenge, so a client knows what to present rather than guessing.
       return send(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
     }

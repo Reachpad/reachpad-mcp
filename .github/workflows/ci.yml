@@ -30,7 +30,7 @@ jobs:
             const expected = [
               "LICENSE", "README.md", "package.json", "src/server.d.ts",
               "src/client.js", "src/errors.js", "src/http.js",
-              "src/server.js", "src/tools.js",
+              "src/server.js", "src/tools.js", "src/validate.js",
             ].sort();
             const same = files.length === expected.length &&
               files.every((f, i) => f === expected[i]);

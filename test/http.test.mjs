@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer as createMcpServer } from '../src/server.js';
-import { listen } from '../src/http.js';
+import { createHttpHandler, listen } from '../src/http.js';
 import { startStubControld } from './lib/stub-controld.mjs';
 
 const TOKEN = 'test-bearer-token';
@@ -169,4 +169,40 @@ test('an oversized body is refused before it is parsed', async () => {
     });
     assert.equal(res.status, 413);
   });
+});
+
+test('no token is a refusal to start, not a decision to let everyone in', async () => {
+  // The bug this pins: `if (token && !presentsToken(...))` — an unset token
+  // short-circuited the guard, so every caller that could reach the port was
+  // authorized on a process holding the user's reachpad credentials.
+  const stub = await startStubControld({});
+  const mcp = createMcpServer({
+    env: { REACHPAD_ENDPOINT: stub.endpoint, REACHPAD_OPERATOR_TOKEN: 'rpop1.test.secret' },
+  });
+  try {
+    assert.throws(() => createHttpHandler(mcp, {}), /refusing to serve an unauthenticated/);
+    await assert.rejects(listen(mcp, {}), /refusing to serve an unauthenticated/);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('serving open is available, and has to be asked for by name', async () => {
+  const stub = await startStubControld({});
+  const mcp = createMcpServer({
+    env: { REACHPAD_ENDPOINT: stub.endpoint, REACHPAD_OPERATOR_TOKEN: 'rpop1.test.secret' },
+  });
+  const http = await listen(mcp, { allowAnonymous: true });
+  try {
+    const { port } = http.address();
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    await new Promise((resolve) => http.close(resolve));
+    await stub.close();
+  }
 });

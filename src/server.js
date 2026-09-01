@@ -13,10 +13,12 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { ControlClient } from './client.js';
 import { buildTools } from './tools.js';
 import { ApiError } from './errors.js';
+import { validateArguments } from './validate.js';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -45,12 +47,15 @@ const LEGACY_TOOL_NAMES = {
  * An explicit `workspace` always wins: a caller that sends both means the one
  * it named under the current spelling, and silently preferring the legacy key
  * would send the command to a different workspace than the one it asked for.
+ * The loser is DROPPED rather than passed through — no tool declares an
+ * `environment` property any more, so leaving it would make the legacy
+ * spelling fail schema validation on the way to the handler that supports it.
  */
 function withLegacyArguments(args) {
-  if (!args || typeof args !== 'object') return args;
-  if (args.environment === undefined || args.workspace !== undefined) return args;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  if (args.environment === undefined) return args;
   const { environment, ...rest } = args;
-  return { ...rest, workspace: environment };
+  return args.workspace !== undefined ? rest : { ...rest, workspace: environment };
 }
 
 /*
@@ -140,8 +145,18 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
             // caller asked for something this server never advertised.
             return error(id, -32602, `unknown tool: ${requested}`);
           }
+          // The schema is a promise this server makes in `tools/list`, so it
+          // is checked here rather than trusted. Same code as `unknown tool`
+          // above and for the same reason: the caller sent something this
+          // server never said it would accept, which is a protocol error and
+          // not a tool that ran and failed.
+          const args = withLegacyArguments(params?.arguments ?? {});
+          const problems = validateArguments(args, tool.inputSchema);
+          if (problems.length) {
+            return error(id, -32602, `invalid arguments for ${tool.name}: ${problems.join('; ')}`);
+          }
           try {
-            const text = await tool.handler(withLegacyArguments(params.arguments ?? {}));
+            const text = await tool.handler(args);
             return reply(id, { content: [{ type: 'text', text }], isError: false });
           } catch (err) {
             // A tool that refused is a RESULT, not a transport error — the
@@ -214,10 +229,19 @@ if (invokedDirectly) {
     // decision someone makes on purpose, in front of a proxy that terminates
     // TLS and does the authorization.
     const { listen } = await import('./http.js');
+    // Authenticated by DEFAULT. An unset token used to mean "let everyone in"
+    // with a warning on stderr nobody reads, on a port every other process and
+    // every other user on the machine can reach — and `run_command` is one
+    // POST behind it. So a missing token is now MINTED and printed rather than
+    // treated as consent, and the open endpoint is a thing someone asks for.
+    const configured = process.env.REACHPAD_MCP_HTTP_TOKEN;
+    const anonymous = process.env.REACHPAD_MCP_HTTP_NO_AUTH === '1';
+    const token = anonymous ? undefined : configured || randomBytes(32).toString('base64url');
     const http = await listen(createServer(), {
       port: Number(port),
       host: process.env.REACHPAD_MCP_HTTP_HOST || '127.0.0.1',
-      token: process.env.REACHPAD_MCP_HTTP_TOKEN,
+      token,
+      allowAnonymous: anonymous,
       allowedOrigins: (process.env.REACHPAD_MCP_ALLOWED_ORIGINS || '')
         .split(',')
         .map((origin) => origin.trim())
@@ -225,9 +249,17 @@ if (invokedDirectly) {
     });
     const { address, port: bound } = http.address();
     process.stderr.write(`reachpad mcp: streamable http on http://${address}:${bound}\n`);
-    if (!process.env.REACHPAD_MCP_HTTP_TOKEN) {
+    if (anonymous) {
       process.stderr.write(
-        'reachpad mcp: WARNING — no REACHPAD_MCP_HTTP_TOKEN, every caller that can reach this port is authorized\n',
+        'reachpad mcp: WARNING — REACHPAD_MCP_HTTP_NO_AUTH=1, every caller that can reach this port is authorized\n',
+      );
+    } else if (!configured) {
+      // Printed, because a token nobody can read is the same as a closed port.
+      process.stderr.write(
+        `reachpad mcp: no REACHPAD_MCP_HTTP_TOKEN was set, so this one was generated for this run:\n\n` +
+          `    Authorization: Bearer ${token}\n\n` +
+          `reachpad mcp: it changes every restart. Set REACHPAD_MCP_HTTP_TOKEN to pin it, or\n` +
+          `reachpad mcp: REACHPAD_MCP_HTTP_NO_AUTH=1 to serve with no authentication at all.\n`,
       );
     }
   } else {
