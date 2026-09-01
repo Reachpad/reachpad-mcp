@@ -55,6 +55,24 @@ nothing is held across calls that a restart could not rebuild. And it carries
 **no credential of its own**: whatever authorizes the HTTP request is what
 authorizes reachpad.
 
+It is **authenticated by default**. Set `REACHPAD_MCP_HTTP_TOKEN` and that is
+the bearer token; set nothing and one is generated for the run and printed on
+stderr, because a port that bridges to your account with `run_command` behind
+it should not be open to every other process on the machine:
+
+```
+reachpad mcp: streamable http on http://127.0.0.1:8722
+reachpad mcp: no REACHPAD_MCP_HTTP_TOKEN was set, so this one was generated for this run:
+
+    Authorization: Bearer 3Qk…
+
+reachpad mcp: it changes every restart. Set REACHPAD_MCP_HTTP_TOKEN to pin it, or
+reachpad mcp: REACHPAD_MCP_HTTP_NO_AUTH=1 to serve with no authentication at all.
+```
+
+Serving with no authentication is still available and is now something you say
+out loud: `REACHPAD_MCP_HTTP_NO_AUTH=1`.
+
 ## Configure
 
 | variable | meaning |
@@ -64,7 +82,8 @@ authorizes reachpad.
 | `REACHPAD_API_KEY` | optional, per-workspace scoped and revocable. When set, `run_command` uses it and needs no identity exchange. |
 | `REACHPAD_MCP_HTTP_PORT` | serve HTTP instead of stdio. |
 | `REACHPAD_MCP_HTTP_HOST` | default `127.0.0.1`. This process bridges to a control plane with your credentials, so binding it to the world is a decision made on purpose, behind a proxy that terminates TLS. |
-| `REACHPAD_MCP_HTTP_TOKEN` | bearer token, compared in constant time. Absent, **every caller that can reach the port is authorized**, and the server says so on stderr. |
+| `REACHPAD_MCP_HTTP_TOKEN` | bearer token, compared in constant time. Absent, one is **generated for the run and printed on stderr** — the endpoint is never unauthenticated by omission. |
+| `REACHPAD_MCP_HTTP_NO_AUTH` | `1` serves with no authentication at all: **every caller that can reach the port is authorized**. An affirmative choice, not a default. |
 | `REACHPAD_MCP_ALLOWED_ORIGINS` | comma-separated. A request carrying an unlisted `Origin` is refused — a browser cannot forge it, which closes DNS rebinding. No `Origin` at all is a non-browser client and is allowed. |
 
 If several credentials are set, the narrowest wins, and **a refused credential

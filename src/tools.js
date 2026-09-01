@@ -391,14 +391,23 @@ export function buildTools(client) {
  * answered" reports `unknown`: a probe that cannot run is not evidence that
  * the port is dead, and saying so would be worse than saying nothing.
  *
+ * `port` is `shellQuote`d into ONE shell variable and read from there, the way
+ * `cloneScript` has always treated its inputs. It used to be interpolated raw
+ * into a `python3 -c` argument and a grep pattern, and the whole string was
+ * then shipped as `['/bin/sh','-lc',script]` — so the only thing standing
+ * between a tool argument and a shell was an `inputSchema` nothing enforced.
+ * Reading it back as `"$port"` also keeps it out of the python source, where
+ * a quote would have closed the literal the interpolation sat inside.
+ *
  * @returns {Promise<'listening'|'silent'|'unknown'>}
  */
 async function probePort(client, workspace, port) {
   const script =
+    `port=${shellQuote(port)}; ` +
     `if command -v python3 >/dev/null 2>&1; then ` +
     `python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); ` +
-    `sys.exit(0 if s.connect_ex(("127.0.0.1",${port}))==0 else 1)'; ` +
-    `else ss -ltn 2>/dev/null | grep -q ":${port} "; fi`;
+    `sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$port"; ` +
+    `else ss -ltn 2>/dev/null | grep -q ":$port "; fi`;
   try {
     const result = await client.exec(workspace, {
       argv: ['/bin/sh', '-lc', script],

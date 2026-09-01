@@ -11,16 +11,108 @@ name: publish
 # now. Configure it once at npmjs.com on the package:
 #
 #   Settings -> Trusted Publisher -> GitHub Actions
-#   org Reachpad · repo reachpad-mcp · workflow publish.yml · environment blank
+#   org Reachpad · repo reachpad-mcp · workflow publish.yml
+#   ENVIRONMENT: npm-publish   <-- NOT blank. Read the next paragraph.
+#
+# THE ENVIRONMENT NAME IS LOAD-BEARING, and it is the reason this workflow is
+# three jobs instead of one. `id-token: write` mints a token for ANY audience
+# the holder asks for, so any step in a job that has it can ask for
+# `npm:registry.npmjs.org` — and npm's Trusted Publisher check only looks at
+# repository + workflow file, both of which every job here shares. The one
+# claim that differs per job is `environment`. So: the npm publish runs in the
+# `npm-publish` environment and NOTHING ELSE does, and npm is configured to
+# accept only that environment. A token minted in the `registry` job — the one
+# that runs a third-party binary — carries no environment claim and npm
+# refuses it.
+#
+# Consequence, and it is a one-time coordinated change: until the Trusted
+# Publisher entry names `npm-publish`, the npm step fails closed with an OIDC
+# mismatch. Set it before the next tag.
+#
+# The `npm-publish` environment also carries the human gate: deployments from
+# `v*` tags only, and a required reviewer. Same posture as the CLI's
+# `release-signing`, which is the sibling artifact with LESS exposure.
+#
+# `workflow_dispatch` used to be here as a second publish path. It is gone: a
+# dispatch runs from a BRANCH, and a branch is exactly what the tag assertion
+# below exists to refuse.
 
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
+
+# The pinned MCP registry publisher. `releases/latest/download/` used to be
+# used here, which resolved at run time to whatever that third-party pipeline
+# had most recently produced — no version, no checksum, no signature, executed
+# in a job holding a live OIDC minting capability. RE-PIN BOTH LINES ON
+# UPGRADE: the digest is the linux/amd64 tarball's, taken from
+# `registry_<version>_checksums.txt` in the same release and confirmed by
+# downloading and hashing it independently (2026-09-01).
+env:
+  MCP_PUBLISHER_VERSION: v1.8.1
+  MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
 
 jobs:
-  publish:
+  # Everything that can be decided WITHOUT a credential, decided here. This
+  # job has no `id-token`, so the third-party tarball it fetches is downloaded
+  # by a job that could not mint an OIDC token if the tarball asked it to.
+  verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      # A TAG, not a name that looks like one. This used to read
+      # `${GITHUB_REF_NAME#v}`, which is the branch name on a branch build —
+      # so a branch literally called `v0.4.2`, which anyone with write access
+      # can push, satisfied a check meant to mean "this is a release".
+      - name: the ref must be a tag
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error::refusing to publish from ${{ github.ref_type }} ${{ github.ref }}"
+            exit 1
+          fi
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *) echo "::error::not a v* tag ref: $GITHUB_REF"; exit 1 ;;
+          esac
+
+      - run: node --test 'test/*.test.mjs'
+
+      - name: the tag must name the version being published
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match package.json $pkg"
+            exit 1
+          fi
+
+      # Fetched and checked HERE so the bytes that reach the privileged job
+      # are bytes this job already vouched for. The digest is the gate; the
+      # download URL is only how the bytes arrive.
+      - name: fetch mcp-publisher at the pinned version and verify its digest
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-publisher
+          path: mcp-publisher.tar.gz
+          retention-days: 1
+
+  # The ONLY job npm will accept a token from, because it is the only one that
+  # names this environment. First-party steps exclusively — nothing downloaded
+  # at run time executes here.
+  npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
       id-token: write # the whole mechanism; without it npm gets no OIDC claim
       contents: read
@@ -33,16 +125,7 @@ jobs:
       # under us on an unrelated day.
       - name: npm new enough to speak OIDC
         run: npm install -g npm@^11.5.1
-      - run: node --test 'test/*.test.mjs'
-      - name: the tag must name the version being published
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg=$(node -p "require('./package.json').version")
-          if [ "$tag" != "$pkg" ]; then
-            echo "tag v$tag does not match package.json $pkg" >&2
-            exit 1
-          fi
-      # Idempotent on purpose. This job has two publishes — npm and the
+      # Idempotent on purpose. A release here is two publishes — npm and the
       # registry — and the first one succeeding while the second fails leaves a
       # release that cannot simply be re-run: npm refuses a version it already
       # has, so the retry dies before reaching the step that actually failed.
@@ -57,16 +140,38 @@ jobs:
             npm publish
           fi
 
-      # The official registry, in the same release rather than as a thing
-      # somebody remembers to do afterwards. Most other directories index FROM
-      # it, so this is the step that keeps every listing current — and it
-      # authenticates with the SAME GitHub OIDC claim npm just used, which is
-      # why the server name is io.github.reachpad/*: a DNS-verified namespace
-      # would need a credential and would make every release manual again.
+  # The official registry, in the same release rather than as a thing somebody
+  # remembers to do afterwards. Most other directories index FROM it, so this
+  # is the step that keeps every listing current — and it authenticates with a
+  # GitHub OIDC claim, which is why the server name is io.github.reachpad/*: a
+  # DNS-verified namespace would need a credential and would make every release
+  # manual again.
+  #
+  # `mcp-publisher login github-oidc` needs `id-token: write` to do its job, so
+  # this binary does hold a minting capability and no arrangement of steps
+  # removes that. What IS removed is what such a token can reach: no
+  # environment claim, so npm refuses it, and `contents: read` on a public
+  # repository grants nothing a stranger does not already have. The blast
+  # radius is the MCP registry listing, which is the thing this step exists to
+  # write.
+  registry:
+    needs: npm
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: mcp-publisher }
+      # Verified again on this side of the artifact store. Cheap, and it keeps
+      # the pinned digest the single thing anyone has to trust.
+      - name: re-verify the pinned digest, then unpack
+        run: |
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+          chmod +x ./mcp-publisher
       - name: publish to the MCP registry
         run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64.tar.gz" \
-            | tar -xz mcp-publisher
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
-

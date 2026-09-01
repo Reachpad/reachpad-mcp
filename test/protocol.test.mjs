@@ -438,3 +438,144 @@ test('malformed input does not kill the server', async () => {
     assert.equal(init.result.serverInfo.name, 'reachpad');
   });
 });
+
+test('an argument the schema forbids is refused before the handler sees it', async () => {
+  await withServer({}, async (client, stub) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_workspace', { name: 'app' });
+    const before = stub.state.calls.length;
+
+    // `port` is declared `integer` and reaches a shell. It was enforced
+    // nowhere: `tools/call` handed `params.arguments` straight to the handler.
+    const bad = await client.send('tools/call', {
+      name: 'expose_port',
+      arguments: { workspace: 'ws-1', port: "8080'; touch /tmp/pwned; '" },
+    });
+    assert.ok(bad.error, 'a schema violation is a protocol error, like an unknown tool');
+    assert.equal(bad.error.code, -32602);
+    assert.match(bad.error.message, /expected integer, got string/);
+    assert.equal(stub.state.calls.length, before, 'nothing reached the control plane');
+
+    // A missing required argument, and a property no tool declares.
+    const missing = await client.send('tools/call', {
+      name: 'run_command',
+      arguments: { argv: ['true'] },
+    });
+    assert.match(missing.error.message, /`workspace` is required/);
+
+    const extra = await client.send('tools/call', {
+      name: 'get_workspace',
+      arguments: { workspace: 'ws-1', kind: 'memory' },
+    });
+    assert.match(extra.error.message, /unknown property `kind`/);
+  });
+});
+
+test('validation does not break the legacy `environment` argument', async () => {
+  // The rename shim maps `environment` onto `workspace` BEFORE the schema is
+  // checked, and drops the losing key when both are sent — otherwise the
+  // compatibility path would fail `additionalProperties: false` on the way to
+  // the handler that exists to serve it.
+  await withServer({}, async (client, stub) => {
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    await client.call('create_workspace', { name: 'app' });
+    const ran = await client.call('run_command', { environment: 'ws-1', argv: ['true'] });
+    assert.equal(ran.isError, false);
+
+    await client.call('list_ports', { workspace: 'ws-1', environment: 'ws-2' });
+    const ports = stub.state.calls.filter((call) => call.path.includes('port-shares')).pop();
+    assert.match(ports.path, /ws-1/, 'the current spelling still wins');
+  });
+});
+
+test('the HTTP transport mints a token when none was given, and prints it', async () => {
+  // Serving open used to be the DEFAULT: an unset token meant every caller
+  // that could reach the port was authorized, with a stderr warning nobody
+  // reads. A generated token is useless unless it is printed, so both halves
+  // are pinned here.
+  const stub = await startStubControld({});
+  const child = spawn(process.execPath, [SERVER], {
+    env: {
+      ...process.env,
+      REACHPAD_ENDPOINT: stub.endpoint,
+      REACHPAD_OPERATOR_TOKEN: 'rpop1.test.secret',
+      REACHPAD_MCP_HTTP_PORT: '0',
+      REACHPAD_MCP_HTTP_TOKEN: '',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  try {
+    const banner = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no banner; stderr was: ${stderr}`)), 10_000);
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+        if (/Authorization: Bearer /.test(stderr) && /Set REACHPAD_MCP_HTTP_TOKEN/.test(stderr)) {
+          clearTimeout(timer);
+          resolve(stderr);
+        }
+      });
+    });
+
+    const url = `http://127.0.0.1:${banner.match(/streamable http on http:\/\/[^:]+:(\d+)/)[1]}/mcp`;
+    const token = banner.match(/Authorization: Bearer (\S+)/)[1];
+    assert.ok(token.length >= 32, 'a printed token has to be worth presenting');
+
+    const anonymous = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    assert.equal(anonymous.status, 401, 'the generated token is the whole point');
+
+    const authorized = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    assert.equal(authorized.status, 200);
+  } finally {
+    child.kill();
+    await stub.close();
+  }
+});
+
+test('REACHPAD_MCP_HTTP_NO_AUTH is the way to serve open, and it says so', async () => {
+  const stub = await startStubControld({});
+  const child = spawn(process.execPath, [SERVER], {
+    env: {
+      ...process.env,
+      REACHPAD_ENDPOINT: stub.endpoint,
+      REACHPAD_OPERATOR_TOKEN: 'rpop1.test.secret',
+      REACHPAD_MCP_HTTP_PORT: '0',
+      REACHPAD_MCP_HTTP_NO_AUTH: '1',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  try {
+    const banner = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no banner; stderr was: ${stderr}`)), 10_000);
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+        if (/WARNING/.test(stderr)) {
+          clearTimeout(timer);
+          resolve(stderr);
+        }
+      });
+    });
+    assert.match(banner, /every caller that can reach this port is authorized/);
+    assert.doesNotMatch(banner, /Authorization: Bearer/);
+
+    const url = `http://127.0.0.1:${banner.match(/streamable http on http:\/\/[^:]+:(\d+)/)[1]}/mcp`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    child.kill();
+    await stub.close();
+  }
+});
