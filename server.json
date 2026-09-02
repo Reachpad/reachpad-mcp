@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.Reachpad/reachpad-mcp",
   "description": "Coding agents build full-stack apps in persistent workspaces and share them by link.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "websiteUrl": "https://reachpad.dev",
   "repository": {
     "url": "https://github.com/Reachpad/reachpad-mcp",
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@reachpad/mcp",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "transport": {
         "type": "stdio"
       },
