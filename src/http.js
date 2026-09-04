@@ -29,11 +29,10 @@
 
 import { createServer as createHttpServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-
-const MAX_BODY_BYTES = 1024 * 1024; // controld's own control-plane body cap.
+import { MAX_MESSAGE_BYTES, PROTOCOL_VERSION, payloadProblem } from './jsonrpc.js';
 
 /**
- * @param {{handle: (message: object) => Promise<object|null>}} server
+ * @param {{handle: (payload: unknown) => Promise<object|null>}} server
  * @param {{token?: string, allowedOrigins?: string[], allowAnonymous?: boolean}} options
  */
 export function createHttpHandler(server, options = {}) {
@@ -83,6 +82,15 @@ export function createHttpHandler(server, options = {}) {
       return send(401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
     }
 
+    // Stateless does not mean versionless. After initialization an HTTP MCP
+    // client names the negotiated revision on every request; an absent header
+    // remains accepted for the protocol's backwards-compatible fallback, but
+    // an explicit value this server cannot speak must fail closed.
+    const protocolVersion = req.headers['mcp-protocol-version'];
+    if (protocolVersion !== undefined && protocolVersion !== PROTOCOL_VERSION) {
+      return send(400, rpcError(-32600, 'unsupported MCP protocol version'));
+    }
+
     let raw;
     try {
       raw = await readBody(req);
@@ -102,17 +110,19 @@ export function createHttpHandler(server, options = {}) {
       return send(400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
     }
 
-    // A JSON-RPC batch is an array. Answer each, drop the nulls that
-    // notifications produce, and return 202 when nothing is left to say.
-    if (Array.isArray(message)) {
-      const responses = (await Promise.all(message.map((one) => server.handle(one)))).filter(Boolean);
-      return responses.length ? send(200, responses) : send(202, null);
-    }
+    // A malformed request or a batch is an HTTP 400 as well as JSON-RPC
+    // -32600. MCP 2025-06-18 removed JSON-RPC batching entirely.
+    const problem = payloadProblem(message);
+    if (problem) return send(400, rpcError(-32600, problem));
 
     const response = await server.handle(message);
     if (!response) return send(202, null);
     return send(200, response);
   };
+}
+
+function rpcError(code, message) {
+  return { jsonrpc: '2.0', id: null, error: { code, message } };
 }
 
 /** Constant-time bearer comparison; a length mismatch is still a mismatch. */
@@ -133,10 +143,10 @@ function readBody(req) {
     req.on('data', (chunk) => {
       if (refused) return; // keep draining; the answer is already decided
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > MAX_MESSAGE_BYTES) {
         refused = true;
         chunks.length = 0;
-        reject(new Error(`body exceeds ${MAX_BODY_BYTES} bytes`));
+        reject(new Error(`body exceeds ${MAX_MESSAGE_BYTES} bytes`));
         return;
       }
       chunks.push(chunk);

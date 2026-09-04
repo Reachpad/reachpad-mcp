@@ -84,16 +84,19 @@ function check(value, schema, path) {
         continue;
       }
       if (schema.additionalProperties === false) {
-        problems.push(`${path}: unknown property \`${name}\``);
+        // Property names are payload too: callers sometimes paste secrets as
+        // keys, and protocol diagnostics are commonly logged. Say what is
+        // wrong without reflecting the untrusted name.
+        problems.push(`${path}: contains a property not declared by the schema`);
       } else if (isPlainObject(schema.additionalProperties)) {
-        problems.push(...check(entry, schema.additionalProperties, `${path}.${name}`));
+        problems.push(...check(entry, schema.additionalProperties, `${path}.*`));
       }
     }
   }
 
   if (type === 'array') {
     if (schema.minItems !== undefined && value.length < schema.minItems) {
-      problems.push(`${path}: needs at least ${schema.minItems} item(s), got ${value.length}`);
+      problems.push(`${path}: needs at least ${schema.minItems} item(s)`);
     }
     if (schema.items) {
       value.forEach((entry, index) => {
@@ -104,10 +107,10 @@ function check(value, schema, path) {
 
   if (type === 'integer' || type === 'number') {
     if (schema.minimum !== undefined && value < schema.minimum) {
-      problems.push(`${path}: must be >= ${schema.minimum}, got ${value}`);
+      problems.push(`${path}: must be >= ${schema.minimum}`);
     }
     if (schema.maximum !== undefined && value > schema.maximum) {
-      problems.push(`${path}: must be <= ${schema.maximum}, got ${value}`);
+      problems.push(`${path}: must be <= ${schema.maximum}`);
     }
   }
 

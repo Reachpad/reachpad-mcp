@@ -12,8 +12,8 @@ export type McpMessage = unknown;
 
 export interface McpServer {
   /**
-   * Handle one JSON-RPC message. Resolves to the response object, or `null`
-   * for a notification, which a transport turns into 202 with no body.
+   * Handle one parsed JSON-RPC payload. Resolves to one response, or `null`
+   * for a notification, which HTTP turns into 202 with no body.
    *
    * Safe to destructure: it closes over its own state and never uses `this`.
    */

@@ -41,6 +41,12 @@ on:
   push:
     tags: ["v*"]
 
+permissions: {}
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 # The pinned MCP registry publisher. `releases/latest/download/` used to be
 # used here, which resolved at run time to whatever that third-party pipeline
 # had most recently produced — no version, no checksum, no signature, executed
@@ -58,11 +64,12 @@ jobs:
   # by a job that could not mint an OIDC token if the tarball asked it to.
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: "22" }
 
       # A TAG, not a name that looks like one. This used to read
@@ -80,7 +87,17 @@ jobs:
             *) echo "::error::not a v* tag ref: $GITHUB_REF"; exit 1 ;;
           esac
 
-      - run: node --test 'test/*.test.mjs'
+      - name: install the exact npm used to publish
+        run: |
+          npm install -g npm@11.5.1 --ignore-scripts
+          actual_npm="$(npm --version)"
+          if [ "$actual_npm" != "11.5.1" ]; then
+            echo "::error::npm bootstrap installed $actual_npm; expected 11.5.1"
+            exit 1
+          fi
+
+      - name: test and retain the exact npm artifact
+        run: REACHPAD_PACKAGE_ARTIFACT=reachpad-mcp.tgz npm run ci
 
       - name: the tag must name the version being published
         run: |
@@ -96,49 +113,58 @@ jobs:
       # download URL is only how the bytes arrive.
       - name: fetch mcp-publisher at the pinned version and verify its digest
         run: |
-          curl -fsSL -o mcp-publisher.tar.gz \
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            --connect-timeout 10 --max-time 120 -o mcp-publisher.tar.gz \
             "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
           echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mcp-publisher
           path: mcp-publisher.tar.gz
           retention-days: 1
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-package
+          path: reachpad-mcp.tgz
+          retention-days: 1
+
   # The ONLY job npm will accept a token from, because it is the only one that
-  # names this environment. First-party steps exclusively — nothing downloaded
-  # at run time executes here.
+  # names this environment. Only pinned first-party actions and an exact npm
+  # version run here. npm is necessarily executable release infrastructure;
+  # lifecycle scripts are disabled while bootstrapping it.
   npm:
     needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: npm-publish
     permissions:
       id-token: write # the whole mechanism; without it npm gets no OIDC claim
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
-      # Node 22 ships npm 10, which predates OIDC publishing entirely. A floor
-      # rather than @latest, so a future npm cannot change a release out from
-      # under us on an unrelated day.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: npm-package }
+      # Node 22 ships npm 10, which predates OIDC publishing entirely. Pin the
+      # npm version exactly, and use the same version in verify, so packaging
+      # semantics cannot change underneath an unrelated release.
       - name: npm new enough to speak OIDC
-        run: npm install -g npm@^11.5.1
-      # Idempotent on purpose. A release here is two publishes — npm and the
-      # registry — and the first one succeeding while the second fails leaves a
-      # release that cannot simply be re-run: npm refuses a version it already
-      # has, so the retry dies before reaching the step that actually failed.
-      # Skipping an existing version makes the tag re-runnable until BOTH
-      # halves are done, which is the only state worth calling released.
-      - name: publish to npm
         run: |
-          version=$(node -p "require('./package.json').version")
-          if npm view "@reachpad/mcp@$version" version >/dev/null 2>&1; then
-            echo "@reachpad/mcp@$version is already on npm; leaving it alone"
-          else
-            npm publish
+          npm install -g npm@11.5.1 --ignore-scripts
+          actual_npm="$(npm --version)"
+          if [ "$actual_npm" != "11.5.1" ]; then
+            echo "::error::npm bootstrap installed $actual_npm; expected 11.5.1"
+            exit 1
           fi
+      # Idempotent only for identical bytes. The unprivileged job packed,
+      # installed and smoke-tested this exact tarball. A retry compares its
+      # SHA-512 integrity with npm and fails closed if that version contains
+      # anything else.
+      - name: publish to npm
+        run: node scripts/publish-package.mjs reachpad-mcp.tgz
 
   # The official registry, in the same release rather than as a thing somebody
   # remembers to do afterwards. Most other directories index FROM it, so this
@@ -157,12 +183,13 @@ jobs:
   registry:
     needs: npm
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with: { name: mcp-publisher }
       # Verified again on this side of the artifact store. Cheap, and it keeps
       # the pinned digest the single thing anyone has to trust.

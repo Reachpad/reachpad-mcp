@@ -55,13 +55,33 @@ test('minimum and maximum are enforced, not decorative', () => {
   assert.deepEqual(validateArguments({ workspace: 'ws-1', port: 8080 }, schema), []);
 });
 
+test('run_command timeout is bounded by the server cap', () => {
+  const schema = schemaFor('run_command');
+  assert.match(
+    validateArguments({ workspace: 'ws-1', argv: ['true'], timeout_ms: 0 }, schema)[0],
+    /must be >= 1/,
+  );
+  assert.deepEqual(
+    validateArguments({ workspace: 'ws-1', argv: ['true'], timeout_ms: 1 }, schema),
+    [],
+  );
+  assert.deepEqual(
+    validateArguments({ workspace: 'ws-1', argv: ['true'], timeout_ms: 600_000 }, schema),
+    [],
+  );
+  assert.match(
+    validateArguments({ workspace: 'ws-1', argv: ['true'], timeout_ms: 600_001 }, schema)[0],
+    /must be <= 600000/,
+  );
+});
+
 test('additionalProperties: false refuses a property the tool never declared', () => {
   const problems = validateArguments(
     { workspace: 'ws-1', kind: 'memory' },
     schemaFor('get_workspace'),
   );
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /unknown property `kind`/);
+  assert.match(problems[0], /property not declared by the schema/);
 });
 
 test('array items and minItems are checked all the way down', () => {
@@ -85,7 +105,7 @@ test('a schema-valued additionalProperties checks the values', () => {
   );
   assert.match(
     validateArguments({ workspace: 'ws-1', argv: ['true'], env: { A: 3 } }, schema)[0],
-    /env\.A: expected string/,
+    /env\.\*: expected string/,
   );
 });
 

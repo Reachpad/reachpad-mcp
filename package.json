@@ -36,12 +36,13 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test 'test/*.test.mjs'",
-    "ci": "node --test 'test/*.test.mjs'",
+    "test": "node --test 'test/*.test.mjs' && npm run check:package",
+    "check:package": "node scripts/check-package.mjs",
+    "ci": "npm test",
     "prepublishOnly": "node scripts/publish-guard.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "types": "./src/server.d.ts"
 }

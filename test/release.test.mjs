@@ -9,7 +9,19 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  EXPECTED_PACKAGE_FILES,
+  validatePackReport,
+} from '../scripts/check-package.mjs';
+import {
+  assertMatchingIntegrity,
+  publishedVersions,
+  sha512Integrity,
+} from '../scripts/publish-package.mjs';
 import { guard, isCi, releaseWorkflowIdentity } from '../scripts/publish-guard.mjs';
 
 /** The environment the release workflow actually presents. */
@@ -91,6 +103,33 @@ test('the guard names the control it cannot itself provide', async () => {
   assert.match(source, /Trusted-Publisher-only/);
 });
 
+test('the publish guard still runs when its filesystem path contains spaces', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'reachpad publish guard '));
+  try {
+    const target = join(directory, 'publish guard.mjs');
+    const source = await readFile(new URL('../scripts/publish-guard.mjs', import.meta.url));
+    await writeFile(target, source);
+    const child = spawnSync(process.execPath, [target], {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH },
+    });
+    assert.equal(child.status, 1);
+    assert.match(
+      child.stderr,
+      /REFUSING to publish/,
+      `guard subprocess: ${JSON.stringify({
+        status: child.status,
+        signal: child.signal,
+        error: child.error?.message,
+        stdout: child.stdout,
+        stderr: child.stderr,
+      })}`,
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
 test('mcp-publisher is pinned to a version and a digest, never to `latest`', async () => {
   const publish = await workflow('publish.yml');
   // `releases/latest/download/` resolves at run time, in a job that mints OIDC
@@ -133,4 +172,154 @@ test('a tag is the only way in, and the ref type is asserted', async () => {
   // on a branch build, so `v0.4.2` reads identically there.
   assert.match(publish, /tag="\$\{GITHUB_REF#refs\/tags\/v\}"/);
   assert.doesNotMatch(publish, /GITHUB_REF_NAME/);
+});
+
+test('every workflow action is pinned to an immutable commit', async () => {
+  const expected = {
+    'ci.yml': [
+      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+      'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+    ],
+    'publish.yml': [
+      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+      'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+      'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+      'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+      'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+      'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+    ],
+  };
+  for (const name of Object.keys(expected)) {
+    const source = await workflow(name);
+    const actions = [...source.matchAll(/^\s*- uses: ([^@\s]+)@([^\s]+)/gm)];
+    assert.ok(actions.length > 0, `${name} must contain an action to inspect`);
+    for (const [, action, ref] of actions) {
+      assert.match(ref, /^[0-9a-f]{40}$/, `${name}: ${action} is not commit-pinned`);
+    }
+    assert.deepEqual(
+      actions.map(([, action, ref]) => `${action}@${ref}`),
+      expected[name],
+      `${name} must use only the reviewed action commits`,
+    );
+  }
+});
+
+test('CI is read-only and covers all supported Node release lines', async () => {
+  const ci = await workflow('ci.yml');
+  assert.match(ci, /^permissions:\n  contents: read$/m);
+  assert.match(ci, /node: \[22, 24, 26\]/);
+  assert.match(ci, /timeout-minutes: 10/);
+  assert.match(ci, /npm run ci/);
+});
+
+test('release retries serialize by tag and every release job has a deadline', async () => {
+  const publish = await workflow('publish.yml');
+  assert.match(publish, /^permissions: \{\}$/m, 'future jobs must start with no token permissions');
+  assert.match(publish, /group: publish-\$\{\{ github\.ref \}\}/);
+  assert.match(publish, /cancel-in-progress: false/);
+  assert.equal((publish.match(/timeout-minutes:/g) ?? []).length, 3);
+});
+
+test('release packaging and publication use one exact npm version', async () => {
+  const publish = await workflow('publish.yml');
+  const installs = publish.match(/npm install -g npm@11\.5\.1 --ignore-scripts/g) ?? [];
+  assert.equal(installs.length, 2, 'verify and publish must use the same exact npm');
+  assert.equal((publish.match(/actual_npm="\$\(npm --version\)"/g) ?? []).length, 2);
+  assert.equal((publish.match(/expected 11\.5\.1/g) ?? []).length, 2);
+  assert.doesNotMatch(publish, /npm@(\^|~|latest)/);
+  assert.match(publish, /npm run ci/);
+  assert.match(publish, /REACHPAD_PACKAGE_ARTIFACT=reachpad-mcp\.tgz/);
+  assert.match(publish, /with: \{ name: npm-package \}/);
+  assert.match(publish, /publish-package\.mjs reachpad-mcp\.tgz/);
+  assert.doesNotMatch(publish, /^\s+npm publish\s*$/m);
+});
+
+test('an npm retry continues only when the published bytes match', () => {
+  const local = sha512Integrity(Buffer.from('verified artifact'));
+  assert.match(local, /^sha512-/);
+  assert.doesNotThrow(() => assertMatchingIntegrity(local, local));
+  assert.throws(
+    () => assertMatchingIntegrity(local, sha512Integrity(Buffer.from('different artifact'))),
+    /different bytes.*refusing/i,
+  );
+  assert.throws(() => assertMatchingIntegrity(local, undefined), /missing or invalid/);
+  assert.deepEqual(publishedVersions('"0.4.2"'), ['0.4.2']);
+  assert.deepEqual(publishedVersions('["0.4.1","0.4.2"]'), ['0.4.1', '0.4.2']);
+  assert.throws(() => publishedVersions('{}'), /invalid published-version list/);
+});
+
+test('package metadata exposes only the supported entry point and no install hooks', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.deepEqual(pkg.files, ['src', 'README.md']);
+  assert.deepEqual(pkg.exports, {
+    '.': { types: './src/server.d.ts', default: './src/server.js' },
+  });
+  assert.deepEqual(pkg.bin, { 'reachpad-mcp': './src/server.js' });
+  assert.equal(pkg.types, './src/server.d.ts');
+  assert.equal(pkg.engines.node, '>=22');
+  assert.equal(pkg.publishConfig.access, 'public');
+  for (const field of [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+    'bundledDependencies',
+  ]) {
+    assert.equal(pkg[field], undefined, `${field} must remain absent from this zero-dependency package`);
+  }
+  for (const hook of [
+    'preinstall',
+    'install',
+    'postinstall',
+    'prepublish',
+    'prepare',
+    'prepack',
+    'postpack',
+    'publish',
+    'postpublish',
+  ]) {
+    assert.equal(pkg.scripts[hook], undefined, `${hook} would execute on a consumer's machine`);
+  }
+  assert.equal(pkg.scripts.prepublishOnly, 'node scripts/publish-guard.mjs');
+});
+
+test('the packed-file allowlist includes every runtime module and reflects no stray paths', () => {
+  const pkg = {
+    name: '@reachpad/mcp',
+    version: '0.4.2',
+    repository: {
+      type: 'git',
+      url: 'git+https://github.com/Reachpad/reachpad-mcp.git',
+    },
+  };
+  const report = [{
+    name: pkg.name,
+    version: pkg.version,
+    size: 123,
+    files: EXPECTED_PACKAGE_FILES.map((path) => ({ path })),
+  }];
+  assert.deepEqual(validatePackReport(report, pkg).files, EXPECTED_PACKAGE_FILES);
+  assert.ok(EXPECTED_PACKAGE_FILES.includes('src/jsonrpc.js'));
+
+  const secret = 'npm-token-secret-sentinel';
+  const stray = structuredClone(report);
+  stray[0].files.push({ path: `src/${secret}` });
+  assert.throws(
+    () => validatePackReport(stray, pkg),
+    (error) => {
+      assert.match(error.message, /contents differ from the allowlist/);
+      assert.doesNotMatch(error.message, new RegExp(secret));
+      return true;
+    },
+  );
+
+  const lookalike = structuredClone(pkg);
+  lookalike.repository.url = 'git+https://github.com/evil/Reachpad/reachpad-mcp.git';
+  assert.throws(
+    () => validatePackReport(report, lookalike),
+    /repository must exactly name the provenance repository/,
+  );
 });

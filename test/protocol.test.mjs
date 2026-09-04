@@ -467,7 +467,7 @@ test('an argument the schema forbids is refused before the handler sees it', asy
       name: 'get_workspace',
       arguments: { workspace: 'ws-1', kind: 'memory' },
     });
-    assert.match(extra.error.message, /unknown property `kind`/);
+    assert.match(extra.error.message, /property not declared by the schema/);
   });
 });
 

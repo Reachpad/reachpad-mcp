@@ -17,6 +17,8 @@
  * ADR §5).
  */
 
+import { MAX_EXEC_TIMEOUT_MS } from './client.js';
+
 const OUTPUT_BUDGET = 4_000;
 
 /** Trim to the tail — the end of a build log is where the failure is. */
@@ -37,10 +39,20 @@ function renderExec(result) {
   if (result.resumed) lines.push('(the workspace was paused and resumed to run this)');
   if (result.timed_out) lines.push('TIMED OUT — the command did not finish');
   if (result.truncated) lines.push('output hit the entitlement cap and was truncated server-side');
-  if (out.text) lines.push(`--- stdout${out.dropped ? ` (first ${out.dropped} bytes dropped)` : ''} ---\n${out.text}`);
-  if (err.text) lines.push(`--- stderr${err.dropped ? ` (first ${err.dropped} bytes dropped)` : ''} ---\n${err.text}`);
+  if (out.text) lines.push(`--- stdout${dropNote(result, 'stdout', out)} ---\n${out.text}`);
+  if (err.text) lines.push(`--- stderr${dropNote(result, 'stderr', err)} ---\n${err.text}`);
   if (!out.text && !err.text) lines.push('(no output)');
   return lines.join('\n');
+}
+
+function dropNote(result, stream, rendered) {
+  const notes = [];
+  const clientDropped = result[`${stream}_dropped_bytes`] ?? 0;
+  if (clientDropped) notes.push(`first ${clientDropped} bytes dropped by the client memory limit`);
+  if (rendered.dropped) {
+    notes.push(`first ${rendered.dropped} retained characters dropped for the MCP output limit`);
+  }
+  return notes.length ? ` (${notes.join('; ')})` : '';
 }
 
 /**
@@ -57,7 +69,7 @@ export function buildTools(client) {
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async handler() {
         const balance = await client.creditBalance();
-        const millicredits = Number(balance.balance_millicredits ?? 0);
+        const millicredits = balance.balance_millicredits;
         return `${(millicredits / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })} compute credits remaining\n1 credit = 1 active standard-workspace minute`;
       },
     },
@@ -196,8 +208,10 @@ export function buildTools(client) {
           env: { type: 'object', additionalProperties: { type: 'string' } },
           timeout_ms: {
             type: 'integer',
+            minimum: 1,
+            maximum: MAX_EXEC_TIMEOUT_MS,
             description:
-              'Give up after this long. PASS IT. Clamped by the entitlement server-side, and without it the workspace is allowed ten minutes — so a wedged workspace costs you ten before you learn anything. Seconds to a couple of minutes suits most commands; raise it for builds.',
+              'Give up after this long, up to 600000 ms. PASS IT. Without it the workspace is allowed ten minutes — so a wedged workspace costs you ten before you learn anything. Seconds to a couple of minutes suits most commands; raise it for builds.',
           },
         },
         required: ['workspace', 'argv'],

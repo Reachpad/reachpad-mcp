@@ -21,7 +21,13 @@ export async function startStubControld(options = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://stub');
     const body = await readJson(req);
-    state.calls.push({ method: req.method, path: url.pathname, body });
+    state.calls.push({
+      method: req.method,
+      path: url.pathname,
+      query: url.search,
+      authorization: req.headers.authorization,
+      body,
+    });
 
     const send = (status, payload) => {
       res.writeHead(status, { 'content-type': 'application/json' });
@@ -81,7 +87,11 @@ export async function startStubControld(options = {}) {
           ? body.name.trim()
           : `workspace-${id.slice(3).padStart(12, '0')}`;
       state.workspaces.set(id, { id, name, forks: [], archived: false });
-      return send(201, { workspace: { id, name }, biscuit: `biscuit-${id}` });
+      return send(201, {
+        workspace: { id, name },
+        biscuit: `biscuit-${id}`,
+        expires_at_ms: Date.now() + 3_600_000,
+      });
     }
 
     if (url.pathname === '/v1/workspaces' && req.method === 'GET') {
@@ -164,10 +174,17 @@ export async function startStubControld(options = {}) {
 
       if (verb === 'token') {
         if (!ws) return send(404, { error: 'workspace_not_found' });
-        return send(200, { biscuit: `biscuit-${id}` });
+        return send(200, {
+          biscuit: `biscuit-${id}`,
+          expires_at_ms: state.biscuitExpiresAtMs ?? Date.now() + 3_600_000,
+        });
       }
       if (verb === 'lineage') {
         if (!ws) return send(404, { error: 'workspace_not_found' });
+        if (state.rejectLineageOnce) {
+          state.rejectLineageOnce = false;
+          return send(403, { error: 'not_authorized' });
+        }
         return send(200, {
           head_snapshot: state.head ?? { id: 'snap-42', log_seq: 42, purpose: 'checkpoint' },
           forks: ws.forks,
