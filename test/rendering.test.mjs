@@ -51,7 +51,7 @@ test('output is tailed, and the drop is named', () => {
     timed_out: false,
     resumed: false,
   });
-  assert.match(rendered, /bytes dropped/);
+  assert.match(rendered, /characters dropped/);
   assert.match(rendered, /THE-FAILURE-IS-HERE/);
 });
 
@@ -97,7 +97,10 @@ test('a repo url cannot break out of the clone command', () => {
 test('endpoint resolution refuses plaintext to anywhere but loopback', () => {
   assert.equal(resolveEndpoint('m1.reachpad.dev'), 'https://m1.reachpad.dev');
   assert.equal(resolveEndpoint('https://m1.reachpad.dev/'), 'https://m1.reachpad.dev');
+  assert.equal(resolveEndpoint('HTTPS://m1.reachpad.dev/'), 'https://m1.reachpad.dev');
   assert.equal(resolveEndpoint('http://127.0.0.1:7401'), 'http://127.0.0.1:7401');
+  assert.throws(() => resolveEndpoint('HTTP://example.com'), /refusing plaintext/);
+  assert.throws(() => resolveEndpoint('ftp://example.com'), /unsupported endpoint protocol/);
   assert.throws(() => resolveEndpoint('http://example.com'), /refusing plaintext/);
   assert.throws(() => resolveEndpoint(''), /no endpoint/);
 });

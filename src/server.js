@@ -12,15 +12,20 @@
  *   REACHPAD_API_KEY         rpak1.… — optional; used for run_command.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
 import { ControlClient } from './client.js';
 import { buildTools } from './tools.js';
 import { ApiError } from './errors.js';
 import { validateArguments } from './validate.js';
-
-const PROTOCOL_VERSION = '2025-06-18';
+import {
+  isNotification,
+  MAX_MESSAGE_BYTES,
+  PROTOCOL_VERSION,
+  payloadProblem,
+  requestProblem,
+} from './jsonrpc.js';
 
 /*
  * Until 0.4.0 this server called a workspace an "environment" — in six tool
@@ -92,15 +97,28 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
   const account = env.REACHPAD_ACCOUNT_LABEL?.trim();
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
 
-  /** @returns {object|null} a response, or null for a notification. */
-  async function handle(message) {
-    const { id, method, params } = message ?? {};
-    const isNotification = id === undefined || id === null;
+  /**
+   * Handle one parsed JSON-RPC payload. A null result means it was a valid
+   * notification and therefore gets no response.
+   */
+  async function handle(payload) {
+    const problem = payloadProblem(payload);
+    if (problem) return error(null, -32600, problem);
+    return handleOne(payload);
+  }
+
+  async function handleOne(message) {
+    const problem = requestProblem(message);
+    if (problem) return error(null, -32600, problem);
+
+    const { id, method, params } = message;
+    const notification = isNotification(message);
 
     try {
+      let response;
       switch (method) {
         case 'initialize':
-          return reply(id, {
+          response = reply(id, {
             protocolVersion: PROTOCOL_VERSION,
             capabilities: { tools: { listChanged: false } },
             serverInfo: SERVER_INFO,
@@ -114,12 +132,15 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
                 }
               : {}),
           });
+          break;
 
         case 'notifications/initialized':
-          return null;
+          response = reply(id, {});
+          break;
 
         case 'ping':
-          return reply(id, {});
+          response = reply(id, {});
+          break;
 
         case 'tools/list':
           // `title` and `annotations` are not decoration: a client shows the
@@ -127,7 +148,7 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
           // calls need approval at all. Anthropic's connector review flags a
           // tool that carries neither, and it is right to — an agent deciding
           // whether `run_command` is safe to retry has nothing else to read.
-          return reply(id, {
+          response = reply(id, {
             tools: tools.map(({ name, title, description, inputSchema, annotations }) => ({
               name,
               title,
@@ -136,6 +157,7 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
               annotations,
             })),
           });
+          break;
 
         case 'tools/call': {
           const requested = params?.name;
@@ -143,7 +165,8 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
           if (!tool) {
             // An unknown tool is a protocol error, not a tool failure: the
             // caller asked for something this server never advertised.
-            return error(id, -32602, `unknown tool: ${requested}`);
+            response = error(id, -32602, 'unknown tool');
+            break;
           }
           // The schema is a promise this server makes in `tools/list`, so it
           // is checked here rather than trusted. Same code as `unknown tool`
@@ -153,27 +176,34 @@ export function createServer({ env = process.env, fetchImpl } = {}) {
           const args = withLegacyArguments(params?.arguments ?? {});
           const problems = validateArguments(args, tool.inputSchema);
           if (problems.length) {
-            return error(id, -32602, `invalid arguments for ${tool.name}: ${problems.join('; ')}`);
+            response = error(
+              id,
+              -32602,
+              `invalid arguments for the requested tool: ${problems.join('; ')}`,
+            );
+            break;
           }
           try {
             const text = await tool.handler(args);
-            return reply(id, { content: [{ type: 'text', text }], isError: false });
+            response = reply(id, { content: [{ type: 'text', text }], isError: false });
           } catch (err) {
             // A tool that refused is a RESULT, not a transport error — the
             // model must see the refusal and its remedy, and be able to act.
-            return reply(id, {
+            response = reply(id, {
               content: [{ type: 'text', text: describe(err) }],
               isError: true,
             });
           }
+          break;
         }
 
         default:
-          if (isNotification) return null;
-          return error(id, -32601, `method not found: ${method}`);
+          response = error(id, -32601, 'method not found');
+          break;
       }
+      return notification ? null : response;
     } catch (err) {
-      if (isNotification) return null;
+      if (notification) return null;
       return error(id, -32603, describe(err));
     }
   }
@@ -194,33 +224,131 @@ function error(id, code, message) {
   return { jsonrpc: '2.0', id, error: { code, message } };
 }
 
-/** Wire the server to stdio. Split out so tests can drive `handle` directly. */
+/**
+ * Wire the server to newline-delimited stdio with a hard byte bound per
+ * message. Processing one line at a time applies backpressure to stdin rather
+ * than turning a fast producer into an unbounded queue of handler promises.
+ */
 export function serveStdio(server, input = process.stdin, output = process.stdout) {
-  const lines = createInterface({ input, crlfDelay: Infinity });
-  lines.on('line', (line) => {
-    const text = line.trim();
+  /** @type {Buffer[]} */
+  let pending = [];
+  let pendingBytes = 0;
+  let discardingOversized = false;
+  let closed = false;
+  let work = Promise.resolve();
+
+  const write = async (value) => {
+    if (closed) return;
+    if (!output.write(`${JSON.stringify(value)}\n`)) {
+      await new Promise((resolve) => output.once('drain', resolve));
+    }
+  };
+
+  const processLine = async () => {
+    const bytes = Buffer.concat(pending, pendingBytes);
+    pending = [];
+    pendingBytes = 0;
+    const text = bytes.toString('utf8').trim();
     if (!text) return;
+
     let message;
     try {
       message = JSON.parse(text);
     } catch {
-      output.write(`${JSON.stringify(error(null, -32700, 'parse error'))}\n`);
+      await write(error(null, -32700, 'parse error'));
       return;
     }
-    server
-      .handle(message)
-      .then((response) => {
-        if (response) output.write(`${JSON.stringify(response)}\n`);
+    try {
+      const response = await server.handle(message);
+      if (response !== null) await write(response);
+    } catch (err) {
+      await write(error(message?.id ?? null, -32603, describe(err)));
+    }
+  };
+
+  const consume = async (value) => {
+    const chunk = Buffer.from(value);
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(0x0a, offset);
+      const end = newline < 0 ? chunk.length : newline;
+      const part = chunk.subarray(offset, end);
+
+      if (!discardingOversized && pendingBytes + part.length > MAX_MESSAGE_BYTES) {
+        pending = [];
+        pendingBytes = 0;
+        discardingOversized = true;
+        await write(
+          error(
+            null,
+            -32700,
+            `parse error: stdio message exceeds ${MAX_MESSAGE_BYTES} bytes`,
+          ),
+        );
+      } else if (!discardingOversized && part.length) {
+        // Copy the slice so a short pending suffix cannot retain an
+        // arbitrarily large source chunk while stdin is paused.
+        pending.push(Buffer.from(part));
+        pendingBytes += part.length;
+      }
+
+      if (newline < 0) break;
+      if (discardingOversized) {
+        discardingOversized = false;
+      } else {
+        await processLine();
+      }
+      offset = newline + 1;
+    }
+  };
+
+  const enqueue = (task) => {
+    input.pause?.();
+    work = work
+      .then(task)
+      .catch(async () => {
+        await write(error(null, -32603, 'internal error'));
       })
-      .catch((err) => {
-        output.write(`${JSON.stringify(error(message?.id ?? null, -32603, describe(err)))}\n`);
+      .finally(() => {
+        if (!closed) input.resume?.();
       });
-  });
-  return lines;
+  };
+
+  const onData = (chunk) => enqueue(() => consume(chunk));
+  const onEnd = () =>
+    enqueue(async () => {
+      if (!discardingOversized && pendingBytes) await processLine();
+    });
+  const onError = () =>
+    enqueue(() => write(error(null, -32603, 'stdio input failed')));
+  input.on('data', onData);
+  input.on('end', onEnd);
+  input.on('error', onError);
+
+  return {
+    close() {
+      closed = true;
+      input.off('data', onData);
+      input.off('end', onEnd);
+      input.off('error', onError);
+      input.pause?.();
+      pending = [];
+      pendingBytes = 0;
+    },
+  };
 }
 
-const invokedDirectly =
-  process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+let invokedDirectly = false;
+if (process.argv[1]) {
+  try {
+    // npm's `.bin/reachpad-mcp` is a symlink on POSIX. Compare the real path
+    // so the installed executable starts just like `node src/server.js`, but
+    // do not make an unrelated package import fail if its argv path vanished.
+    invokedDirectly = import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    invokedDirectly = false;
+  }
+}
 if (invokedDirectly) {
   const port = process.env.REACHPAD_MCP_HTTP_PORT;
   if (port) {

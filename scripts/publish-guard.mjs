@@ -36,6 +36,8 @@
  * runs the tests and both publishes.
  */
 
+import { pathToFileURL } from 'node:url';
+
 const REPOSITORY = 'Reachpad/reachpad-mcp';
 
 /** Truthy `CI` as the ecosystem means it: "false" and "0" are not CI. */
@@ -96,9 +98,11 @@ export function guard(env) {
   };
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
   const { exitCode, message } = guard(process.env);
   if (message) process.stderr.write(message);
-  process.exit(exitCode);
+  // Let stdio drain before Node exits. `process.exit()` can truncate the very
+  // refusal that tells a CI log or a human why the publish was stopped.
+  process.exitCode = exitCode;
 }

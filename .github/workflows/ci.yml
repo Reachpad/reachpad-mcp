@@ -10,44 +10,18 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "22" }
-      - run: node --test 'test/*.test.mjs'
-      # The package is what ships, not the repository. A `files` entry that
-      # drifts is how a test fixture or a stray note reaches a registry, so the
-      # contents are asserted rather than assumed.
-      - name: the tarball contains exactly what it should
-        run: |
-          npm pack --dry-run --json > /tmp/pack.json
-          node -e '
-            const [p] = require("/tmp/pack.json");
-            const files = p.files.map(f => f.path).sort();
-            const expected = [
-              "LICENSE", "README.md", "package.json", "src/server.d.ts",
-              "src/client.js", "src/errors.js", "src/http.js",
-              "src/server.js", "src/tools.js", "src/validate.js",
-            ].sort();
-            const same = files.length === expected.length &&
-              files.every((f, i) => f === expected[i]);
-            if (!same) {
-              console.error("packed:", files);
-              console.error("expected:", expected);
-              process.exit(1);
-            }
-            console.log("tarball is", p.size, "bytes,", files.length, "files");
-            // npm signs provenance on every OIDC publish and REFUSES the
-            // upload when package.json does not name the repository it was
-            // built from. That rejection arrives after the tarball is built
-            // and the attestation is already in the transparency log, which is
-            // a confusing place to learn it — so assert it here instead.
-            const repo = require("./package.json").repository?.url ?? "";
-            if (!repo.includes("Reachpad/reachpad-mcp")) {
-              console.error("repository.url must name this repo for provenance; got:", repo || "(missing)");
-              process.exit(1);
-            }
-          '
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: "${{ matrix.node }}" }
+      - run: npm run ci

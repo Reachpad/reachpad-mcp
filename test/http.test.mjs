@@ -20,6 +20,7 @@ async function withHttp(options, body) {
       REACHPAD_OPERATOR_TOKEN: 'rpop1.test.secret',
       ...(options.env ?? {}),
     },
+    fetchImpl: options.fetchImpl,
   });
   const http = await listen(mcp, { token: options.token, allowedOrigins: options.allowedOrigins });
   const { port } = http.address();
@@ -81,22 +82,90 @@ test('a notification is accepted with nothing to say', async () => {
     const res = await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
     assert.equal(res.status, 202);
     assert.equal(await res.text(), '');
+
+    const unknown = await rpc({ jsonrpc: '2.0', method: 'untrusted-secret-method' });
+    assert.equal(unknown.status, 202, 'even an unknown valid notification gets no response');
+    assert.equal(await unknown.text(), '');
   });
 });
 
-test('a batch answers each message that has an id', async () => {
+test('every HTTP JSON-RPC batch is refused before dispatch', async () => {
+  await withHttp({ token: TOKEN }, async ({ rpc, stub }) => {
+    const before = stub.state.calls.length;
+    for (const messages of [
+      [],
+      [{ jsonrpc: '2.0', id: 1, method: 'ping' }],
+      [
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'create_workspace', arguments: { name: 'must-not-exist' } },
+        },
+        { jsonrpc: '2.0', method: 'ping' },
+      ],
+    ]) {
+      const response = await rpc(messages);
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.equal(body.error.code, -32600);
+      assert.match(body.error.message, /batches are not supported/);
+    }
+    assert.equal(stub.state.calls.length, before, 'no unsupported-batch member is dispatched');
+  });
+});
+
+test('HTTP rejects malformed envelopes with -32600 and never reflects their values', async () => {
+  await withHttp({ token: TOKEN }, async ({ rpc, stub }) => {
+    const secret = 'http-rpc-secret-sentinel';
+    const malformed = [
+      null,
+      secret,
+      {},
+      {
+        jsonrpc: '1.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'create_workspace', arguments: { name: secret } },
+      },
+      { jsonrpc: '2.0', id: true, method: 'ping' },
+      { jsonrpc: '2.0', id: null, method: 'ping' },
+      { jsonrpc: '2.0', id: 1, method: 4 },
+      { jsonrpc: '2.0', id: 1, method: 'ping', params: null },
+      { jsonrpc: '2.0', id: 1, method: 'ping', params: [] },
+      { jsonrpc: '2.0', id: 1, method: 'ping', params: secret },
+    ];
+    const before = stub.state.calls.length;
+    for (const message of malformed) {
+      const response = await rpc(message);
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.equal(body.jsonrpc, '2.0');
+      assert.equal(body.id, null);
+      assert.equal(body.error.code, -32600);
+      assert.match(body.error.message, /^invalid request:/);
+      assert.doesNotMatch(JSON.stringify(body), new RegExp(secret));
+    }
+    assert.equal(stub.state.calls.length, before, 'malformed envelopes never reach controld');
+  });
+});
+
+test('HTTP enforces an explicitly supplied MCP protocol revision', async () => {
   await withHttp({ token: TOKEN }, async ({ rpc }) => {
-    const res = await rpc([
+    const supported = await rpc(
       { jsonrpc: '2.0', id: 1, method: 'ping' },
-      { jsonrpc: '2.0', method: 'notifications/initialized' },
-      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-    ]);
-    const body = await res.json();
-    assert.equal(body.length, 2, 'the notification contributes no response');
-    assert.deepEqual(
-      body.map((one) => one.id),
-      [1, 2],
+      { headers: { 'mcp-protocol-version': '2025-06-18' } },
     );
+    assert.equal(supported.status, 200);
+
+    const unsupported = await rpc(
+      { jsonrpc: '2.0', id: 2, method: 'ping' },
+      { headers: { 'mcp-protocol-version': '2025-03-26' } },
+    );
+    assert.equal(unsupported.status, 400);
+    const body = await unsupported.json();
+    assert.equal(body.error.code, -32600);
+    assert.match(body.error.message, /unsupported MCP protocol version/);
   });
 });
 
